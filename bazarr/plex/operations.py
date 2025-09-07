@@ -1,79 +1,158 @@
 # coding=utf-8
-import logging
 from datetime import datetime
-import requests
-from app.config import settings, write_config
+from app.config import settings
 from plexapi.server import PlexServer
+from plexapi.myplex import MyPlexAccount
+import logging
+import base64
+import json
 
 logger = logging.getLogger(__name__)
+
+# Constants
+DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+
+def _extract_plex_token(token_string: str) -> str:
+    """
+    Extract the actual Plex token from Bazarr's encrypted token format.
+    Bazarr stores Plex tokens in a JWT-like format with base64 encoding.
+    """
+    try:
+        # Check if this looks like a JWT-style token
+        if '.' in token_string and len(token_string.split('.')) >= 2:
+            # Split the token and decode the payload
+            parts = token_string.split('.')
+            payload = parts[0]
+            
+            # Add padding if needed for base64 decoding
+            payload += '=' * (4 - len(payload) % 4)
+            
+            # Decode base64 and parse JSON
+            decoded_bytes = base64.b64decode(payload)
+            decoded_data = json.loads(decoded_bytes.decode('utf-8'))
+            
+            # Extract the actual token
+            if 'token' in decoded_data:
+                actual_token = decoded_data['token']
+                logger.debug("Successfully extracted Plex token from encrypted format")
+                return actual_token
+            else:
+                logger.warning("Token field not found in decoded data, using original token")
+                return token_string
+        else:
+            # If it doesn't look like JWT format, use as-is
+            logger.debug("Token doesn't appear to be encrypted, using as-is")
+            return token_string
+            
+    except Exception as e:
+        logger.warning(f"Failed to extract token from encrypted format: {e}, using original")
+        return token_string
 
 
 def get_plex_server() -> PlexServer:
     """Connect to the Plex server and return the server instance."""
-    from api.plex.security import TokenManager, get_or_create_encryption_key, encrypt_api_key
-    
-    session = requests.Session()
-    session.verify = False
-    
     try:
-        auth_method = settings.plex.get('auth_method', 'apikey')
+        # Try direct connection first
+        return _connect_direct_to_plex()
+    
+    except Exception as direct_error:
+        logger.warning(f"Direct connection failed: {direct_error}")
         
-        if auth_method == 'oauth':
-            # OAuth authentication - use encrypted token and configured server URL
-            
-            encrypted_token = settings.plex.get('token')
-            if not encrypted_token:
-                raise ValueError("OAuth token not found. Please re-authenticate with Plex.")
-            
-            # Get or create encryption key
-            encryption_key = get_or_create_encryption_key(settings.plex, 'encryption_key')
-            token_manager = TokenManager(encryption_key)
-            
-            try:
-                decrypted_token = token_manager.decrypt(encrypted_token)
-            except Exception as e:
-                logger.error(f"Failed to decrypt OAuth token: {type(e).__name__}")
-                raise ValueError("Invalid OAuth token. Please re-authenticate with Plex.")
-            
-            # Use configured OAuth server URL
-            server_url = settings.plex.get('server_url')
-            if not server_url:
-                raise ValueError("Server URL not configured. Please select a Plex server.")
-            
-            plex_server = PlexServer(server_url, decrypted_token, session=session)
-            
-        else:
-            # Manual/API key authentication - always use encryption now
-            protocol = "https://" if settings.plex.ssl else "http://"
-            baseurl = f"{protocol}{settings.plex.ip}:{settings.plex.port}"
-            
-            apikey = settings.plex.get('apikey')
-            if not apikey:
-                raise ValueError("API key not configured. Please configure Plex authentication.")
-            
-            # Auto-encrypt plain text API keys
-            if not settings.plex.get('apikey_encrypted', False):
-                logger.info("Auto-encrypting plain text API key")
-                encrypt_api_key()
-                apikey = settings.plex.get('apikey')  # Get the encrypted version
-            
-            # Decrypt the API key
-            encryption_key = get_or_create_encryption_key(settings.plex, 'encryption_key')
-            token_manager = TokenManager(encryption_key)
-            
-            try:
-                decrypted_apikey = token_manager.decrypt(apikey)
-            except Exception as e:
-                logger.error(f"Failed to decrypt API key: {type(e).__name__}")
-                raise ValueError("Invalid encrypted API key. Please reconfigure Plex authentication.")
-            
-            plex_server = PlexServer(baseurl, decrypted_apikey, session=session)
+        # If direct connection fails, try MyPlex authentication
+        try:
+            logger.info("Attempting MyPlex authentication as fallback...")
+            return _connect_via_myplex()
         
-        return plex_server
+        except Exception as myplex_error:
+            logger.error(f"MyPlex authentication also failed: {myplex_error}")
+            logger.error(f"Current Plex config - IP: '{settings.plex.ip}', Port: {settings.plex.port}, SSL: {settings.plex.ssl}")
+            if hasattr(settings.plex, 'server_url'):
+                logger.error(f"Server URL: '{settings.plex.server_url}'")
             
-    except Exception as e:
-        logger.error(f"Failed to connect to Plex server: {e}")
-        raise
+            # Re-raise the original direct connection error
+            raise direct_error
+
+
+def _connect_direct_to_plex() -> PlexServer:
+    """Attempt direct connection to Plex server using configured URL/token."""
+    # Check if we have a configured server_url (preferred method)
+    if hasattr(settings.plex, 'server_url') and settings.plex.server_url:
+        baseurl = settings.plex.server_url
+        logger.debug(f"Using configured Plex server URL: {baseurl}")
+    else:
+        # Fallback to IP/port construction if server_url not available
+        if not settings.plex.ip:
+            raise ValueError("Plex server IP address is not configured. Please configure Plex integration in Bazarr settings.")
+        
+        protocol = "https://" if settings.plex.ssl else "http://"
+        baseurl = f"{protocol}{settings.plex.ip}:{settings.plex.port}"
+        logger.debug(f"Using constructed Plex server URL: {baseurl}")
+    
+    # Use token if available, fallback to apikey
+    auth_token = None
+    if hasattr(settings.plex, 'token') and settings.plex.token:
+        auth_token = _extract_plex_token(settings.plex.token)
+        logger.debug("Using extracted Plex token for authentication")
+    elif settings.plex.apikey:
+        auth_token = settings.plex.apikey
+        logger.debug("Using Plex API key for authentication")
+    else:
+        raise ValueError("Plex authentication token/API key is not configured. Please configure Plex integration in Bazarr settings.")
+    
+    # Create and test connection
+    plex_server = PlexServer(baseurl, auth_token)
+    
+    # Test connection by getting server info
+    _ = plex_server.version
+    logger.info(f"Direct connection successful: {plex_server.friendlyName} (version {plex_server.version})")
+    
+    return plex_server
+
+
+def _connect_via_myplex() -> PlexServer:
+    """Attempt connection via MyPlex account with server discovery."""
+    # Check if we have server identification info
+    if not (hasattr(settings.plex, 'server_name') and settings.plex.server_name):
+        raise ValueError("Server name not configured for MyPlex authentication")
+    
+    # Get authentication token for MyPlex
+    auth_token = None
+    if hasattr(settings.plex, 'token') and settings.plex.token:
+        auth_token = _extract_plex_token(settings.plex.token)
+    elif settings.plex.apikey:
+        auth_token = settings.plex.apikey
+    else:
+        raise ValueError("No authentication token available for MyPlex")
+    
+    # Connect to MyPlex account 
+    account = MyPlexAccount(token=auth_token)
+    
+    # Find the server by name or machine ID
+    server_resource = None
+    
+    # Try by server name first
+    try:
+        server_resource = account.resource(settings.plex.server_name)
+        logger.info(f"Found server by name: {settings.plex.server_name}")
+    except:
+        # Try by machine ID if available
+        if hasattr(settings.plex, 'server_machine_id') and settings.plex.server_machine_id:
+            for resource in account.resources():
+                if resource.clientIdentifier == settings.plex.server_machine_id:
+                    server_resource = resource
+                    logger.info(f"Found server by machine ID: {settings.plex.server_machine_id}")
+                    break
+    
+    if not server_resource:
+        available_servers = [r.name for r in account.resources() if hasattr(r, 'name')]
+        raise ValueError(f"Plex server '{settings.plex.server_name}' not found. Available servers: {available_servers}")
+    
+    # Connect to the server
+    plex_server = server_resource.connect()
+    logger.info(f"MyPlex connection successful: {plex_server.friendlyName} (version {plex_server.version})")
+    
+    return plex_server
 
 
 def update_added_date(video, added_date: str) -> None:
@@ -97,7 +176,8 @@ def plex_set_movie_added_date_now(movie_metadata) -> None:
         plex = get_plex_server()
         library = plex.library.section(settings.plex.movie_library)
         video = library.getGuid(guid=movie_metadata.imdbId)
-        update_added_date(video, datetime.now().isoformat())
+        current_date = datetime.now().strftime(DATETIME_FORMAT)
+        update_added_date(video, current_date)
     except Exception as e:
         logger.error(f"Error in plex_set_movie_added_date_now: {e}")
 
@@ -113,7 +193,8 @@ def plex_set_episode_added_date_now(episode_metadata) -> None:
         library = plex.library.section(settings.plex.series_library)
         show = library.getGuid(episode_metadata.imdbId)
         episode = show.episode(season=episode_metadata.season, episode=episode_metadata.episode)
-        update_added_date(episode, datetime.now().isoformat())
+        current_date = datetime.now().strftime(DATETIME_FORMAT)
+        update_added_date(episode, current_date)
     except Exception as e:
         logger.error(f"Error in plex_set_episode_added_date_now: {e}")
 
@@ -132,36 +213,3 @@ def plex_update_library(is_movie_library: bool) -> None:
         logger.info(f"Triggered update for library: {library_name}")
     except Exception as e:
         logger.error(f"Error in plex_update_library: {e}")
-
-
-def plex_refresh_item(imdb_id: str, is_movie: bool, season: int = None, episode: int = None) -> None:
-    """
-    Refresh a specific item in Plex instead of scanning the entire library.
-    This is much more efficient than a full library scan when subtitles are added.
-
-    :param imdb_id: IMDB ID of the content
-    :param is_movie: True for movie, False for TV episode
-    :param season: Season number for TV episodes
-    :param episode: Episode number for TV episodes
-    """
-    try:
-        plex = get_plex_server()
-        library_name = settings.plex.movie_library if is_movie else settings.plex.series_library
-        library = plex.library.section(library_name)
-        
-        if is_movie:
-            # Refresh specific movie
-            item = library.getGuid(f"imdb://{imdb_id}")
-            item.refresh()
-            logger.info(f"Refreshed movie: {item.title} (IMDB: {imdb_id})")
-        else:
-            # Refresh specific episode
-            show = library.getGuid(f"imdb://{imdb_id}")
-            episode_item = show.episode(season=season, episode=episode)
-            episode_item.refresh()
-            logger.info(f"Refreshed episode: {show.title} S{season:02d}E{episode:02d} (IMDB: {imdb_id})")
-            
-    except Exception as e:
-        logger.warning(f"Failed to refresh specific item (IMDB: {imdb_id}), falling back to library update: {e}")
-        # Fallback to full library update if specific refresh fails
-        plex_update_library(is_movie)
