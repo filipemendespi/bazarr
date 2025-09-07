@@ -10,7 +10,7 @@ import signal
 from dogpile.cache import make_region
 from datetime import datetime
 
-from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Integer, LargeBinary, Text, func, text, BigInteger
+from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Integer, LargeBinary, Text, func, text, BigInteger, Float
 # importing here to be indirectly imported in other modules later
 from sqlalchemy import update, delete, select, func  # noqa W0611
 from sqlalchemy.orm import scoped_session, sessionmaker, mapped_column, close_all_sessions
@@ -301,6 +301,119 @@ class TableShowsRootfolder(Base):
     error = mapped_column(Text)
     id = mapped_column(Integer, primary_key=True)
     path = mapped_column(Text)
+
+
+class TablePlexLibraries(Base):
+    __tablename__ = 'table_plex_libraries'
+    
+    key = mapped_column(Text, primary_key=True)
+    title = mapped_column(Text, nullable=False)
+    type = mapped_column(Text, nullable=False)
+    agent = mapped_column(Text, nullable=True)
+    scanner = mapped_column(Text, nullable=True)
+    language = mapped_column(Text, nullable=True)
+    uuid = mapped_column(Text, nullable=True, unique=True)
+    enabled = mapped_column(Integer, nullable=True, default=1)
+    sync_enabled = mapped_column(Integer, nullable=True, default=1)
+    last_scan = mapped_column(DateTime, nullable=True)
+    scan_interval = mapped_column(Integer, nullable=True, default=3600)
+    created_at_timestamp = mapped_column(DateTime, nullable=True)
+    updated_at_timestamp = mapped_column(DateTime, nullable=True)
+
+
+class TablePlexShows(Base):
+    __tablename__ = 'table_plex_shows'
+    
+    plexId = mapped_column(Integer, primary_key=True)
+    plexGuid = mapped_column(Text, nullable=False, unique=True)
+    title = mapped_column(Text, nullable=False)
+    year = mapped_column(Integer, nullable=True)
+    imdbId = mapped_column(Text, nullable=True)
+    tvdbId = mapped_column(Integer, nullable=True)
+    tmdbId = mapped_column(Text, nullable=True)
+    path = mapped_column(Text, nullable=False, unique=True)
+    overview = mapped_column(Text, nullable=True)
+    poster = mapped_column(Text, nullable=True)
+    fanart = mapped_column(Text, nullable=True)
+    network = mapped_column(Text, nullable=True)
+    status = mapped_column(Text, nullable=True)
+    genres = mapped_column(Text, nullable=True)
+    profileId = mapped_column(Integer, ForeignKey('table_languages_profiles.profileId', ondelete='SET NULL'), nullable=True)
+    monitored = mapped_column(Integer, nullable=True, default=1)
+    audio_language = mapped_column(Text, nullable=True)
+    created_at_timestamp = mapped_column(DateTime, nullable=True)
+    updated_at_timestamp = mapped_column(DateTime, nullable=True)
+    last_scanned = mapped_column(DateTime, nullable=True)
+    plex_updated_at = mapped_column(DateTime, nullable=True)
+
+
+class TablePlexEpisodes(Base):
+    __tablename__ = 'table_plex_episodes'
+    
+    plexId = mapped_column(Integer, primary_key=True)
+    plexShowId = mapped_column(Integer, ForeignKey('table_plex_shows.plexId', ondelete='CASCADE'), nullable=False)
+    plexGuid = mapped_column(Text, nullable=False, unique=True)
+    title = mapped_column(Text, nullable=False)
+    season = mapped_column(Integer, nullable=False)
+    episode = mapped_column(Integer, nullable=False)
+    path = mapped_column(Text, nullable=False, unique=True)
+    overview = mapped_column(Text, nullable=True)
+    duration = mapped_column(Integer, nullable=True)
+    rating = mapped_column(Float, nullable=True)
+    directors = mapped_column(Text, nullable=True)
+    writers = mapped_column(Text, nullable=True)
+    missing_subtitles = mapped_column(Text, nullable=True)
+    subtitles = mapped_column(Text, nullable=True)
+    failedAttempts = mapped_column(Text, nullable=True)
+    monitored = mapped_column(Integer, nullable=True, default=1)
+    audio_language = mapped_column(Text, nullable=True)
+    audio_codec = mapped_column(Text, nullable=True)
+    video_codec = mapped_column(Text, nullable=True)
+    resolution = mapped_column(Text, nullable=True)
+    file_size = mapped_column(BigInteger, nullable=True)
+    ffprobe_cache = mapped_column(LargeBinary, nullable=True)
+    created_at_timestamp = mapped_column(DateTime, nullable=True)
+    updated_at_timestamp = mapped_column(DateTime, nullable=True)
+    last_scanned = mapped_column(DateTime, nullable=True)
+    plex_updated_at = mapped_column(DateTime, nullable=True)
+    originally_available_at = mapped_column(DateTime, nullable=True)
+
+
+class TablePlexMovies(Base):
+    __tablename__ = 'table_plex_movies'
+    
+    plexId = mapped_column(Integer, primary_key=True)
+    plexGuid = mapped_column(Text, nullable=False, unique=True)
+    title = mapped_column(Text, nullable=False)
+    year = mapped_column(Integer, nullable=True)
+    imdbId = mapped_column(Text, nullable=True)
+    tmdbId = mapped_column(Text, nullable=True)
+    path = mapped_column(Text, nullable=False, unique=True)
+    overview = mapped_column(Text, nullable=True)
+    poster = mapped_column(Text, nullable=True)
+    fanart = mapped_column(Text, nullable=True)
+    duration = mapped_column(Integer, nullable=True)
+    rating = mapped_column(Float, nullable=True)
+    studio = mapped_column(Text, nullable=True)
+    genres = mapped_column(Text, nullable=True)
+    directors = mapped_column(Text, nullable=True)
+    writers = mapped_column(Text, nullable=True)
+    actors = mapped_column(Text, nullable=True)
+    profileId = mapped_column(Integer, ForeignKey('table_languages_profiles.profileId', ondelete='SET NULL'), nullable=True)
+    monitored = mapped_column(Integer, nullable=True, default=1)
+    missing_subtitles = mapped_column(Text, nullable=True)
+    subtitles = mapped_column(Text, nullable=True)
+    failedAttempts = mapped_column(Text, nullable=True)
+    audio_language = mapped_column(Text, nullable=True)
+    audio_codec = mapped_column(Text, nullable=True)
+    video_codec = mapped_column(Text, nullable=True)
+    resolution = mapped_column(Text, nullable=True)
+    file_size = mapped_column(BigInteger, nullable=True)
+    ffprobe_cache = mapped_column(LargeBinary, nullable=True)
+    created_at_timestamp = mapped_column(DateTime, nullable=True)
+    updated_at_timestamp = mapped_column(DateTime, nullable=True)
+    last_scanned = mapped_column(DateTime, nullable=True)
+    plex_updated_at = mapped_column(DateTime, nullable=True)
 
 
 def init_db():
