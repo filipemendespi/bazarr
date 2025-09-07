@@ -48,7 +48,11 @@ parser.add_argument('--no-signalr', default=False, type=bool, const=True, metava
 parser.add_argument('--create-db-revision', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
                     help="Create a new database revision that will be used to migrate database")
 parser.add_argument('--sync-plex-libraries', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
-                    help="Perform Plex library synchronization and exit (default: False)")
+                    help="Perform full Plex library synchronization and exit (default: False)")
+parser.add_argument('--sync-plex-incremental', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
+                    help="Perform incremental Plex library synchronization and exit (default: False)")
+parser.add_argument('--discover-plex-content', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
+                    help="Discover Plex content (movies, shows, episodes) and exit (default: False)")
 
 
 if not no_cli:

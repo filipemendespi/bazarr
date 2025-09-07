@@ -54,18 +54,41 @@ elif args.sync_plex_libraries:
     import logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     
-    print("Starting Plex library synchronization...")
+    print("Starting full Plex library synchronization...")
     sync_result = sync_plex_libraries(full_sync=True, cleanup_removed=True)
     
     if sync_result.get('success', False):
-        print(f"Sync completed successfully!")
+        print(f"Full sync completed successfully!")
         print(f"- Libraries processed: {sync_result.get('libraries_processed', 0)}")
         print(f"- Libraries added: {sync_result.get('libraries_added', 0)}")
         print(f"- Libraries updated: {sync_result.get('libraries_updated', 0)}")
         print(f"- Duration: {sync_result.get('duration_seconds', 0):.2f} seconds")
         stop_bazarr(EXIT_NORMAL)
     else:
-        print("Sync failed with errors:")
+        print("Full sync failed with errors:")
+        for error in sync_result.get('errors', []):
+            print(f"- {error}")
+        stop_bazarr(1)
+elif args.sync_plex_incremental:
+    from plex.sync import sync_plex_libraries
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    print("Starting incremental Plex library synchronization...")
+    sync_result = sync_plex_libraries(full_sync=False, conflict_strategy="plex_wins")
+    
+    if sync_result.get('success', False):
+        print(f"Incremental sync completed successfully!")
+        print(f"- Libraries processed: {sync_result.get('libraries_processed', 0)}")
+        conflicts_detected = sync_result.get('conflicts_detected', 0)
+        conflicts_resolved = sync_result.get('conflicts_resolved', 0)
+        if conflicts_detected > 0:
+            print(f"- Conflicts detected: {conflicts_detected}")
+            print(f"- Conflicts resolved: {conflicts_resolved}")
+        print(f"- Duration: {sync_result.get('duration_seconds', 0):.2f} seconds")
+        stop_bazarr(EXIT_NORMAL)
+    else:
+        print("Incremental sync failed with errors:")
         for error in sync_result.get('errors', []):
             print(f"- {error}")
         stop_bazarr(1)

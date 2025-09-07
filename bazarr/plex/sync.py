@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.database import database, TablePlexLibraries, TablePlexShows, TablePlexEpisodes, TablePlexMovies
 from app.config import settings
 from .operations import get_plex_server
+from .conflict_resolution import create_conflict_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,15 @@ class PlexLibrarySyncService:
     Handles discovery, metadata extraction, and incremental sync.
     """
     
-    def __init__(self):
+    def __init__(self, conflict_strategy: str = "plex_wins"):
         self.plex_server = None
+        self.conflict_resolver = create_conflict_resolver(conflict_strategy)
         self.sync_stats = {
             'libraries_processed': 0,
             'libraries_added': 0,
             'libraries_updated': 0,
+            'conflicts_detected': 0,
+            'conflicts_resolved': 0,
             'sync_start_time': None,
             'sync_end_time': None,
             'errors': []
@@ -336,76 +340,349 @@ class PlexLibrarySyncService:
         return self.sync_stats.copy()
 
 
-def sync_plex_libraries(full_sync: bool = True, cleanup_removed: bool = True) -> Dict:
+    def perform_incremental_sync(self, since_timestamp: Optional[datetime] = None) -> Dict:
+        """
+        Perform incremental synchronization based on updatedAt timestamps.
+        Only sync items that have been updated since the last sync.
+        
+        Args:
+            since_timestamp: Sync items updated since this timestamp. If None, 
+                           uses last successful sync timestamp from database.
+        
+        Returns:
+            Dictionary with sync statistics and results.
+        """
+        self.sync_stats['sync_start_time'] = datetime.now(timezone.utc)
+        logger.info("Starting incremental library synchronization")
+        
+        try:
+            # Step 1: Connect to Plex server
+            if not self._connect_to_plex():
+                return self._finalize_sync_stats(success=False)
+            
+            # Step 2: Determine sync timestamp
+            if since_timestamp is None:
+                since_timestamp = self._get_last_sync_timestamp()
+            
+            if since_timestamp:
+                logger.info(f"Performing incremental sync since: {since_timestamp}")
+            else:
+                logger.info("No previous sync timestamp found, performing full sync")
+                return self.perform_full_library_sync()
+            
+            # Step 3: Get enabled libraries from database
+            enabled_libraries = database.execute(
+                select(TablePlexLibraries)
+                .where(TablePlexLibraries.sync_enabled == 1)
+            ).all()
+            
+            if not enabled_libraries:
+                logger.warning("No enabled libraries found for incremental sync")
+                return self._finalize_sync_stats(success=True)
+            
+            # Step 4: Perform incremental sync for each enabled library
+            total_updated = 0
+            for library in enabled_libraries:
+                updated_count = self._sync_library_incremental(library, since_timestamp)
+                total_updated += updated_count
+                
+                # Update library's last_scan timestamp
+                database.execute(
+                    update(TablePlexLibraries)
+                    .where(TablePlexLibraries.key == library.key)
+                    .values(
+                        last_scan=datetime.now(timezone.utc),
+                        updated_at_timestamp=datetime.now(timezone.utc)
+                    )
+                )
+            
+            # Step 5: Log results
+            conflicts_summary = self.conflict_resolver.get_conflicts_summary()
+            logger.info(f"Incremental sync completed successfully. "
+                       f"Libraries processed: {len(enabled_libraries)}, "
+                       f"Items updated: {total_updated}, "
+                       f"Conflicts detected: {conflicts_summary['total_conflicts']}, "
+                       f"Conflicts resolved: {self.sync_stats['conflicts_resolved']}")
+            
+            return self._finalize_sync_stats(success=True)
+            
+        except Exception as e:
+            logger.error(f"Incremental sync failed: {e}")
+            self.sync_stats['errors'].append(f"Incremental sync failed: {str(e)}")
+            return self._finalize_sync_stats(success=False)
+    
+    def _get_last_sync_timestamp(self) -> Optional[datetime]:
+        """
+        Get the timestamp of the last successful sync from database.
+        Returns the oldest last_scan timestamp across all enabled libraries.
+        """
+        try:
+            result = database.execute(
+                select(TablePlexLibraries.last_scan)
+                .where(
+                    TablePlexLibraries.sync_enabled == 1,
+                    TablePlexLibraries.last_scan.is_not(None)
+                )
+                .order_by(TablePlexLibraries.last_scan.asc())
+            ).first()
+            
+            return result[0] if result else None
+            
+        except Exception as e:
+            logger.error(f"Failed to get last sync timestamp: {e}")
+            return None
+    
+    def _sync_library_incremental(self, library, since_timestamp: datetime) -> int:
+        """
+        Perform incremental sync for a specific library.
+        Returns number of items updated.
+        """
+        updated_count = 0
+        
+        try:
+            section = self.plex_server.library.section(library.title)
+            logger.info(f"Starting incremental sync for library: {library.title}")
+            
+            if library.type == 'movie':
+                updated_count = self._sync_movies_incremental(section, library.key, since_timestamp)
+            elif library.type == 'show':
+                updated_count = self._sync_shows_incremental(section, library.key, since_timestamp)
+            
+            logger.info(f"Incremental sync completed for {library.title}: {updated_count} items updated")
+            
+        except Exception as e:
+            logger.error(f"Failed to sync library {library.title} incrementally: {e}")
+            self.sync_stats['errors'].append(f"Incremental sync failed for library {library.title}: {str(e)}")
+        
+        return updated_count
+    
+    def _sync_movies_incremental(self, section, library_key: str, since_timestamp: datetime) -> int:
+        """
+        Sync movies that have been updated since the given timestamp.
+        """
+        updated_count = 0
+        
+        try:
+            # Get all movies from Plex (we'll filter by timestamp)
+            movies = section.all()
+            
+            for movie in movies:
+                # Check if movie was updated since last sync
+                if hasattr(movie, 'updatedAt') and movie.updatedAt > since_timestamp:
+                    # Check if movie exists in database
+                    existing = database.execute(
+                        select(TablePlexMovies)
+                        .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+                    ).first()
+                    
+                    if existing:
+                        # Update existing movie
+                        self._update_movie_metadata(movie, library_key)
+                    else:
+                        # Add new movie
+                        self._add_movie_metadata(movie, library_key)
+                    
+                    updated_count += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to sync movies incrementally: {e}")
+            
+        return updated_count
+    
+    def _sync_shows_incremental(self, section, library_key: str, since_timestamp: datetime) -> int:
+        """
+        Sync TV shows and episodes that have been updated since the given timestamp.
+        """
+        updated_count = 0
+        
+        try:
+            shows = section.all()
+            
+            for show in shows:
+                # Check if show was updated since last sync
+                if hasattr(show, 'updatedAt') and show.updatedAt > since_timestamp:
+                    # Update show metadata
+                    existing_show = database.execute(
+                        select(TablePlexShows)
+                        .where(TablePlexShows.plex_id == str(show.ratingKey))
+                    ).first()
+                    
+                    if existing_show:
+                        self._update_show_metadata(show, library_key)
+                    else:
+                        self._add_show_metadata(show, library_key)
+                    
+                    # Check episodes for updates
+                    for episode in show.episodes():
+                        if hasattr(episode, 'updatedAt') and episode.updatedAt > since_timestamp:
+                            existing_episode = database.execute(
+                                select(TablePlexEpisodes)
+                                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+                            ).first()
+                            
+                            if existing_episode:
+                                self._update_episode_metadata(episode, str(show.ratingKey))
+                            else:
+                                self._add_episode_metadata(episode, str(show.ratingKey))
+                            
+                            updated_count += 1
+                    
+                    updated_count += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to sync shows incrementally: {e}")
+            
+        return updated_count
+    
+    def _update_movie_metadata(self, movie, library_key: str):
+        """Update existing movie metadata in database with conflict resolution."""
+        try:
+            # Get existing database record
+            existing = database.execute(
+                select(TablePlexMovies)
+                .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+            ).first()
+            
+            if not existing:
+                logger.warning(f"Movie not found in database for update: {movie.title}")
+                return
+            
+            # Get Plex update timestamp
+            plex_updated_at = getattr(movie, 'updatedAt', datetime.now(timezone.utc))
+            
+            # Resolve conflicts using conflict resolver
+            resolved_data = self.conflict_resolver.resolve_movie_conflict(
+                movie, existing, plex_updated_at
+            )
+            
+            # Update with resolved data
+            database.execute(
+                update(TablePlexMovies)
+                .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+                .values(**resolved_data)
+            )
+            
+            # Update conflict statistics
+            conflicts = self.conflict_resolver.get_conflicts_summary()
+            if conflicts['total_conflicts'] > self.sync_stats['conflicts_detected']:
+                self.sync_stats['conflicts_detected'] = conflicts['total_conflicts']
+                self.sync_stats['conflicts_resolved'] += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to update movie metadata for {movie.title}: {e}")
+    
+    def _update_show_metadata(self, show, library_key: str):
+        """Update existing show metadata in database with conflict resolution."""
+        try:
+            # Get existing database record
+            existing = database.execute(
+                select(TablePlexShows)
+                .where(TablePlexShows.plex_id == str(show.ratingKey))
+            ).first()
+            
+            if not existing:
+                logger.warning(f"Show not found in database for update: {show.title}")
+                return
+            
+            # Get Plex update timestamp
+            plex_updated_at = getattr(show, 'updatedAt', datetime.now(timezone.utc))
+            
+            # Resolve conflicts using conflict resolver
+            resolved_data = self.conflict_resolver.resolve_show_conflict(
+                show, existing, plex_updated_at
+            )
+            
+            # Update with resolved data
+            database.execute(
+                update(TablePlexShows)
+                .where(TablePlexShows.plex_id == str(show.ratingKey))
+                .values(**resolved_data)
+            )
+            
+            # Update conflict statistics
+            conflicts = self.conflict_resolver.get_conflicts_summary()
+            if conflicts['total_conflicts'] > self.sync_stats['conflicts_detected']:
+                self.sync_stats['conflicts_detected'] = conflicts['total_conflicts']
+                self.sync_stats['conflicts_resolved'] += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to update show metadata for {show.title}: {e}")
+    
+    def _update_episode_metadata(self, episode, show_plex_id: str):
+        """Update existing episode metadata in database with conflict resolution."""
+        try:
+            # Get existing database record
+            existing = database.execute(
+                select(TablePlexEpisodes)
+                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+            ).first()
+            
+            if not existing:
+                logger.warning(f"Episode not found in database for update: {episode.title}")
+                return
+            
+            # Get Plex update timestamp
+            plex_updated_at = getattr(episode, 'updatedAt', datetime.now(timezone.utc))
+            
+            # Resolve conflicts using conflict resolver
+            resolved_data = self.conflict_resolver.resolve_episode_conflict(
+                episode, existing, plex_updated_at
+            )
+            
+            # Update with resolved data
+            database.execute(
+                update(TablePlexEpisodes)
+                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+                .values(**resolved_data)
+            )
+            
+            # Update conflict statistics
+            conflicts = self.conflict_resolver.get_conflicts_summary()
+            if conflicts['total_conflicts'] > self.sync_stats['conflicts_detected']:
+                self.sync_stats['conflicts_detected'] = conflicts['total_conflicts']
+                self.sync_stats['conflicts_resolved'] += 1
+            
+        except Exception as e:
+            logger.error(f"Failed to update episode metadata for {episode.title}: {e}")
+    
+    def _add_movie_metadata(self, movie, library_key: str):
+        """Add new movie metadata to database (reuses content discovery logic)."""
+        from .content_discovery import PlexContentDiscoveryService
+        discovery_service = PlexContentDiscoveryService()
+        # Use the existing movie discovery logic
+        discovery_service._process_single_movie(movie, library_key, "Incremental Sync")
+    
+    def _add_show_metadata(self, show, library_key: str):
+        """Add new show metadata to database (reuses content discovery logic)."""
+        from .content_discovery import PlexContentDiscoveryService
+        discovery_service = PlexContentDiscoveryService()
+        # Use the existing show discovery logic
+        discovery_service._process_single_show(show, library_key, "Incremental Sync")
+    
+    def _add_episode_metadata(self, episode, show_plex_id: str):
+        """Add new episode metadata to database (reuses content discovery logic)."""
+        from .content_discovery import PlexContentDiscoveryService
+        discovery_service = PlexContentDiscoveryService()
+        # Use the existing episode discovery logic
+        discovery_service._process_single_episode(episode, show_plex_id)
+
+
+def sync_plex_libraries(full_sync: bool = True, cleanup_removed: bool = True, 
+                       conflict_strategy: str = "plex_wins") -> Dict:
     """
     Convenience function to perform Plex library synchronization.
     
     Args:
         full_sync: If True, performs full sync. If False, performs incremental sync.
         cleanup_removed: If True, removes libraries that no longer exist in Plex.
+        conflict_strategy: Strategy for resolving update conflicts ("plex_wins", "database_wins", "merge_metadata", "manual_review").
     
     Returns:
         Dictionary with sync statistics and results.
     """
-    sync_service = PlexLibrarySyncService()
+    sync_service = PlexLibrarySyncService(conflict_strategy=conflict_strategy)
     
     if full_sync:
         return sync_service.perform_full_library_sync(cleanup_removed=cleanup_removed)
     else:
         return sync_service.perform_incremental_sync()
-
-
-def get_library_sync_status() -> Dict:
-    """
-    Get current status of library synchronization.
-    
-    Returns:
-        Dictionary with library counts and sync information.
-    """
-    try:
-        # Get all libraries from database
-        all_libraries = database.execute(select(TablePlexLibraries)).all()
-        
-        # Count by type
-        movie_count = sum(1 for lib in all_libraries if lib.type == 'movie')
-        show_count = sum(1 for lib in all_libraries if lib.type == 'show')
-        enabled_count = sum(1 for lib in all_libraries if lib.enabled and lib.sync_enabled)
-        
-        # Get most recent sync time
-        last_sync = None
-        for lib in all_libraries:
-            if lib.last_scan and (not last_sync or lib.last_scan > last_sync):
-                last_sync = lib.last_scan
-        
-        # Format library list
-        libraries_list = []
-        for lib in all_libraries:
-            libraries_list.append({
-                'key': lib.key,
-                'title': lib.title,
-                'type': lib.type,
-                'enabled': bool(lib.enabled),
-                'sync_enabled': bool(lib.sync_enabled),
-                'last_scan': lib.last_scan.isoformat() if lib.last_scan else None
-            })
-        
-        return {
-            'total_libraries': len(all_libraries),
-            'movie_libraries': movie_count,
-            'show_libraries': show_count,
-            'enabled_libraries': enabled_count,
-            'last_sync': last_sync.isoformat() if last_sync else None,
-            'libraries': libraries_list
-        }
-        
-    except Exception as e:
-        logger.error(f"Failed to get library sync status: {e}")
-        return {
-            'error': str(e),
-            'total_libraries': 0,
-            'movie_libraries': 0,
-            'show_libraries': 0,
-            'enabled_libraries': 0,
-            'last_sync': None,
-            'libraries': []
-        }
