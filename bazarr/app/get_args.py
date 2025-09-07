@@ -47,6 +47,8 @@ parser.add_argument('--no-signalr', default=False, type=bool, const=True, metava
                     help="Disable SignalR connections to Sonarr and/or Radarr (default: False)")
 parser.add_argument('--create-db-revision', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
                     help="Create a new database revision that will be used to migrate database")
+parser.add_argument('--sync-plex-libraries', default=False, type=bool, const=True, metavar="BOOL", nargs="?",
+                    help="Perform Plex library synchronization and exit (default: False)")
 
 
 if not no_cli:

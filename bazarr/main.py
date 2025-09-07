@@ -49,6 +49,26 @@ from literals import EXIT_NORMAL  # noqa E402
 if args.create_db_revision:
     create_db_revision(app)
     stop_bazarr(EXIT_NORMAL)
+elif args.sync_plex_libraries:
+    from plex.sync import sync_plex_libraries
+    import logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    print("Starting Plex library synchronization...")
+    sync_result = sync_plex_libraries(full_sync=True, cleanup_removed=True)
+    
+    if sync_result.get('success', False):
+        print(f"Sync completed successfully!")
+        print(f"- Libraries processed: {sync_result.get('libraries_processed', 0)}")
+        print(f"- Libraries added: {sync_result.get('libraries_added', 0)}")
+        print(f"- Libraries updated: {sync_result.get('libraries_updated', 0)}")
+        print(f"- Duration: {sync_result.get('duration_seconds', 0):.2f} seconds")
+        stop_bazarr(EXIT_NORMAL)
+    else:
+        print("Sync failed with errors:")
+        for error in sync_result.get('errors', []):
+            print(f"- {error}")
+        stop_bazarr(1)
 else:
     migrate_db(app)
     upgrade_languages_profile_values()
