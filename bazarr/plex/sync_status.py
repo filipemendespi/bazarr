@@ -80,7 +80,14 @@ class PlexSyncStatusService:
                 sync_health = "unknown"
 
                 if lib.last_scan and lib.scan_interval:
-                    next_sync = lib.last_scan + timedelta(seconds=lib.scan_interval)
+                    # Ensure last_scan has timezone info
+                    if lib.last_scan.tzinfo is None:
+                        # Assume UTC if no timezone info
+                        last_scan_aware = lib.last_scan.replace(tzinfo=timezone.utc)
+                    else:
+                        last_scan_aware = lib.last_scan
+                    
+                    next_sync = last_scan_aware + timedelta(seconds=lib.scan_interval)
 
                     # Determine sync health
                     if lib.sync_enabled:

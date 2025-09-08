@@ -45,7 +45,12 @@ class PlexConflictResolver:
             Dictionary with resolved metadata values
         """
         try:
-            database_updated_at = database_movie.updated_at_timestamp
+            # Handle both SQLAlchemy Row objects and model instances
+            if hasattr(database_movie, 'updated_at_timestamp'):
+                database_updated_at = database_movie.updated_at_timestamp
+            else:
+                # For SQLAlchemy Row objects, access as dictionary-like
+                database_updated_at = getattr(database_movie, 'updated_at_timestamp', None)
             
             # Check for timestamp conflict
             if self._has_timestamp_conflict(plex_updated_at, database_updated_at):
@@ -91,7 +96,12 @@ class PlexConflictResolver:
             Dictionary with resolved metadata values
         """
         try:
-            database_updated_at = database_show.updated_at_timestamp
+            # Handle both SQLAlchemy Row objects and model instances
+            if hasattr(database_show, 'updated_at_timestamp'):
+                database_updated_at = database_show.updated_at_timestamp
+            else:
+                # For SQLAlchemy Row objects, access as dictionary-like
+                database_updated_at = getattr(database_show, 'updated_at_timestamp', None)
             
             # Check for timestamp conflict
             if self._has_timestamp_conflict(plex_updated_at, database_updated_at):
@@ -137,7 +147,12 @@ class PlexConflictResolver:
             Dictionary with resolved metadata values
         """
         try:
-            database_updated_at = database_episode.updated_at_timestamp
+            # Handle both SQLAlchemy Row objects and model instances
+            if hasattr(database_episode, 'updated_at_timestamp'):
+                database_updated_at = database_episode.updated_at_timestamp
+            else:
+                # For SQLAlchemy Row objects, access as dictionary-like
+                database_updated_at = getattr(database_episode, 'updated_at_timestamp', None)
             
             # Check for timestamp conflict
             if self._has_timestamp_conflict(plex_updated_at, database_updated_at):
@@ -251,15 +266,18 @@ class PlexConflictResolver:
         resolved = database_data.copy()
         
         # Fields that should always come from Plex (authoritative source)
+        # Note: Different content types have different available fields
         plex_authoritative_fields = [
-            'title', 'year', 'duration', 'rating', 'summary', 'tagline', 
-            'studio', 'originally_available_at', 'season_number', 'episode_number'
+            'title', 'year', 'duration', 'rating', 'overview', 
+            'studio', 'network', 'status', 'originally_available_at', 
+            'season', 'episode'
         ]
         
         # Use more recent timestamp to decide on conflicts
         use_plex_for_conflicts = plex_timestamp >= database_timestamp
         
         for field in plex_authoritative_fields:
+            # Only process fields that exist in both Plex data and are valid for this content type
             if field in plex_data:
                 if field in database_data:
                     # Field exists in both - use strategy to decide
@@ -271,7 +289,8 @@ class PlexConflictResolver:
                         # Values are the same, use Plex value
                         resolved[field] = plex_data[field]
                 else:
-                    # Field only in Plex data
+                    # Field only in Plex data - only add if it doesn't conflict with database schema
+                    # This prevents trying to add fields that don't exist in the database table
                     resolved[field] = plex_data[field]
         
         return resolved
@@ -283,8 +302,7 @@ class PlexConflictResolver:
             'year': getattr(movie, 'year', None),
             'rating': float(movie.audienceRating) if hasattr(movie, 'audienceRating') and movie.audienceRating is not None else None,
             'duration': getattr(movie, 'duration', None),
-            'summary': getattr(movie, 'summary', None),
-            'tagline': getattr(movie, 'tagline', None),
+            'overview': getattr(movie, 'summary', None),
             'studio': getattr(movie, 'studio', None)
         }
     
@@ -293,53 +311,64 @@ class PlexConflictResolver:
         return {
             'title': show.title,
             'year': getattr(show, 'year', None),
-            'rating': float(show.audienceRating) if hasattr(show, 'audienceRating') and show.audienceRating is not None else None,
-            'summary': getattr(show, 'summary', None),
-            'studio': getattr(show, 'studio', None)
+            'overview': getattr(show, 'summary', None),
+            'network': getattr(show, 'network', None),
+            'status': getattr(show, 'status', None)
         }
     
     def _extract_episode_metadata(self, episode) -> Dict[str, Any]:
         """Extract metadata from Plex episode object."""
         return {
             'title': episode.title,
-            'season_number': getattr(episode, 'seasonNumber', None),
-            'episode_number': getattr(episode, 'index', None),
+            'season': getattr(episode, 'seasonNumber', None),
+            'episode': getattr(episode, 'index', None),
             'rating': float(episode.audienceRating) if hasattr(episode, 'audienceRating') and episode.audienceRating is not None else None,
-            'summary': getattr(episode, 'summary', None),
+            'overview': getattr(episode, 'summary', None),
             'originally_available_at': getattr(episode, 'originallyAvailableAt', None)
         }
     
     def _extract_movie_database_data(self, movie_record) -> Dict[str, Any]:
         """Extract metadata from database movie record."""
+        def safe_get(record, field):
+            """Safely get field from SQLAlchemy Row or model object."""
+            return getattr(record, field, None)
+        
         return {
-            'title': movie_record.title,
-            'year': movie_record.year,
-            'rating': movie_record.rating,
-            'duration': movie_record.duration,
-            'summary': movie_record.summary,
-            'tagline': movie_record.tagline,
-            'studio': movie_record.studio
+            'title': safe_get(movie_record, 'title'),
+            'year': safe_get(movie_record, 'year'),
+            'rating': safe_get(movie_record, 'rating'),
+            'duration': safe_get(movie_record, 'duration'),
+            'overview': safe_get(movie_record, 'overview'),
+            'studio': safe_get(movie_record, 'studio')
         }
     
     def _extract_show_database_data(self, show_record) -> Dict[str, Any]:
         """Extract metadata from database show record."""
+        def safe_get(record, field):
+            """Safely get field from SQLAlchemy Row or model object."""
+            return getattr(record, field, None)
+        
         return {
-            'title': show_record.title,
-            'year': show_record.year,
-            'rating': show_record.rating,
-            'summary': show_record.summary,
-            'studio': show_record.studio
+            'title': safe_get(show_record, 'title'),
+            'year': safe_get(show_record, 'year'),
+            'overview': safe_get(show_record, 'overview'),
+            'network': safe_get(show_record, 'network'),
+            'status': safe_get(show_record, 'status')
         }
     
     def _extract_episode_database_data(self, episode_record) -> Dict[str, Any]:
         """Extract metadata from database episode record."""
+        def safe_get(record, field):
+            """Safely get field from SQLAlchemy Row or model object."""
+            return getattr(record, field, None)
+        
         return {
-            'title': episode_record.title,
-            'season_number': episode_record.season_number,
-            'episode_number': episode_record.episode_number,
-            'rating': episode_record.rating,
-            'summary': episode_record.summary,
-            'originally_available_at': episode_record.originally_available_at
+            'title': safe_get(episode_record, 'title'),
+            'season': safe_get(episode_record, 'season'),
+            'episode': safe_get(episode_record, 'episode'),
+            'rating': safe_get(episode_record, 'rating'),
+            'overview': safe_get(episode_record, 'overview'),
+            'originally_available_at': safe_get(episode_record, 'originally_available_at')
         }
     
     def get_conflicts_summary(self) -> Dict[str, Any]:

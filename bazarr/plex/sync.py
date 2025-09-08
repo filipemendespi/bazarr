@@ -276,11 +276,55 @@ class PlexLibrarySyncService:
             
             logger.info(f"Discovered {len(discovered_libraries)} media libraries")
             
-            # Step 3: Sync each library
+            # Step 3: Sync each library metadata
             current_library_keys = []
             for library_data in discovered_libraries:
                 if self.sync_library_metadata(library_data):
                     current_library_keys.append(library_data['key'])
+            
+            # Step 3.5: Sync content for each enabled library
+            logger.info("Starting content synchronization for all enabled libraries")
+            total_content_updated = 0
+            enabled_libraries = database.execute(
+                select(TablePlexLibraries)
+                .where(TablePlexLibraries.sync_enabled == 1)
+            ).all()
+            
+            for library in enabled_libraries:
+                try:
+                    # Access fields using the SQLAlchemy row object
+                    lib_title = library.TablePlexLibraries.title if hasattr(library, 'TablePlexLibraries') else library.title
+                    lib_type = library.TablePlexLibraries.type if hasattr(library, 'TablePlexLibraries') else library.type
+                    lib_key = library.TablePlexLibraries.key if hasattr(library, 'TablePlexLibraries') else library.key
+                    
+                    section = self.plex_server.library.section(lib_title)
+                    logger.info(f"Starting full content sync for library: {lib_title}")
+                    
+                    if lib_type == 'movie':
+                        updated_count = self._sync_movies_full(section, lib_key)
+                    elif lib_type == 'show':
+                        updated_count = self._sync_shows_full(section, lib_key)
+                    else:
+                        updated_count = 0
+                        
+                    total_content_updated += updated_count
+                    logger.info(f"Full content sync completed for {lib_title}: {updated_count} items processed")
+                    
+                    # Update library's last_scan timestamp
+                    database.execute(
+                        update(TablePlexLibraries)
+                        .where(TablePlexLibraries.key == lib_key)
+                        .values(
+                            last_scan=datetime.now(timezone.utc),
+                            updated_at_timestamp=datetime.now(timezone.utc)
+                        )
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to sync content for library: {e}")
+                    self.sync_stats['errors'].append(f"Content sync failed for library: {str(e)}")
+            
+            logger.info(f"Content synchronization completed. Total items processed: {total_content_updated}")
             
             # Step 4: Cleanup removed libraries if requested
             removed_count = 0
@@ -288,11 +332,12 @@ class PlexLibrarySyncService:
                 removed_count = self.cleanup_removed_libraries(current_library_keys)
             
             # Step 5: Log results
-            logger.info(f"Library sync completed successfully. "
-                       f"Processed: {self.sync_stats['libraries_processed']}, "
+            logger.info(f"Full sync completed successfully. "
+                       f"Libraries - Processed: {self.sync_stats['libraries_processed']}, "
                        f"Added: {self.sync_stats['libraries_added']}, "
                        f"Updated: {self.sync_stats['libraries_updated']}, "
-                       f"Removed: {removed_count}")
+                       f"Removed: {removed_count}. "
+                       f"Content items processed: {total_content_updated}")
             
             return self._finalize_sync_stats(success=True)
             
@@ -528,7 +573,7 @@ class PlexLibrarySyncService:
                     # Check if movie exists in database
                     existing = database.execute(
                         select(TablePlexMovies)
-                        .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+                        .where(TablePlexMovies.plexId == str(movie.ratingKey))
                     ).first()
                     
                     if existing:
@@ -560,7 +605,7 @@ class PlexLibrarySyncService:
                     # Update show metadata
                     existing_show = database.execute(
                         select(TablePlexShows)
-                        .where(TablePlexShows.plex_id == str(show.ratingKey))
+                        .where(TablePlexShows.plexId == str(show.ratingKey))
                     ).first()
                     
                     if existing_show:
@@ -573,7 +618,7 @@ class PlexLibrarySyncService:
                         if hasattr(episode, 'updatedAt') and episode.updatedAt > since_timestamp:
                             existing_episode = database.execute(
                                 select(TablePlexEpisodes)
-                                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+                                .where(TablePlexEpisodes.plexId == str(episode.ratingKey))
                             ).first()
                             
                             if existing_episode:
@@ -596,7 +641,7 @@ class PlexLibrarySyncService:
             # Get existing database record
             existing = database.execute(
                 select(TablePlexMovies)
-                .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+                .where(TablePlexMovies.plexId == str(movie.ratingKey))
             ).first()
             
             if not existing:
@@ -614,7 +659,7 @@ class PlexLibrarySyncService:
             # Update with resolved data
             database.execute(
                 update(TablePlexMovies)
-                .where(TablePlexMovies.plex_id == str(movie.ratingKey))
+                .where(TablePlexMovies.plexId == str(movie.ratingKey))
                 .values(**resolved_data)
             )
             
@@ -632,7 +677,7 @@ class PlexLibrarySyncService:
                 retry_op = RetryOperation(
                     operation_type=RetryOperationType.SYNC_MOVIE,
                     operation_data={
-                        'plex_id': str(movie.ratingKey),
+                        'plexId': str(movie.ratingKey),
                         'library_key': library_key,
                         'title': movie.title
                     },
@@ -646,7 +691,7 @@ class PlexLibrarySyncService:
             # Get existing database record
             existing = database.execute(
                 select(TablePlexShows)
-                .where(TablePlexShows.plex_id == str(show.ratingKey))
+                .where(TablePlexShows.plexId == str(show.ratingKey))
             ).first()
             
             if not existing:
@@ -664,7 +709,7 @@ class PlexLibrarySyncService:
             # Update with resolved data
             database.execute(
                 update(TablePlexShows)
-                .where(TablePlexShows.plex_id == str(show.ratingKey))
+                .where(TablePlexShows.plexId == str(show.ratingKey))
                 .values(**resolved_data)
             )
             
@@ -682,7 +727,7 @@ class PlexLibrarySyncService:
                 retry_op = RetryOperation(
                     operation_type=RetryOperationType.SYNC_SHOW,
                     operation_data={
-                        'plex_id': str(show.ratingKey),
+                        'plexId': str(show.ratingKey),
                         'library_key': library_key,
                         'title': show.title
                     },
@@ -696,7 +741,7 @@ class PlexLibrarySyncService:
             # Get existing database record
             existing = database.execute(
                 select(TablePlexEpisodes)
-                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+                .where(TablePlexEpisodes.plexId == str(episode.ratingKey))
             ).first()
             
             if not existing:
@@ -714,7 +759,7 @@ class PlexLibrarySyncService:
             # Update with resolved data
             database.execute(
                 update(TablePlexEpisodes)
-                .where(TablePlexEpisodes.plex_id == str(episode.ratingKey))
+                .where(TablePlexEpisodes.plexId == str(episode.ratingKey))
                 .values(**resolved_data)
             )
             
@@ -732,34 +777,266 @@ class PlexLibrarySyncService:
                 retry_op = RetryOperation(
                     operation_type=RetryOperationType.SYNC_EPISODE,
                     operation_data={
-                        'plex_id': str(episode.ratingKey),
-                        'show_plex_id': show_plex_id,
+                        'plexId': str(episode.ratingKey),
+                        'plexShowId': show_plex_id,
                         'title': episode.title
                     },
                     error_message=str(e)
                 )
                 retry_service.add_retry_operation(retry_op)
     
+    def _extract_external_ids(self, item) -> Dict[str, Optional[str]]:
+        """
+        Extract external IDs (IMDB, TVDB, TMDB) from Plex GUID.
+        Returns dictionary with external IDs.
+        """
+        import re
+        
+        ids = {'imdbId': None, 'tvdbId': None, 'tmdbId': None}
+        
+        if hasattr(item, 'guid'):
+            guid = str(item.guid)
+            
+            # IMDB ID extraction
+            if 'imdb://' in guid:
+                match = re.search(r'imdb://(?:tt)?(\w+)', guid)
+                if match:
+                    ids['imdbId'] = f"tt{match.group(1)}"
+            
+            # TVDB ID extraction  
+            if 'tvdb://' in guid:
+                match = re.search(r'tvdb://(\d+)', guid)
+                if match:
+                    ids['tvdbId'] = match.group(1)
+            
+            # TMDB ID extraction
+            if 'tmdb://' in guid:
+                match = re.search(r'tmdb://(\d+)', guid)
+                if match:
+                    ids['tmdbId'] = match.group(1)
+            
+            # Handle Plex agents that include external IDs
+            for guid_part in guid.split('?'):
+                if 'imdb=' in guid_part:
+                    match = re.search(r'imdb=(?:tt)?(\w+)', guid_part)
+                    if match:
+                        ids['imdbId'] = f"tt{match.group(1)}"
+                if 'tvdb=' in guid_part:
+                    match = re.search(r'tvdb=(\d+)', guid_part)
+                    if match:
+                        ids['tvdbId'] = match.group(1)
+                if 'tmdb=' in guid_part:
+                    match = re.search(r'tmdb=(\d+)', guid_part)
+                    if match:
+                        ids['tmdbId'] = match.group(1)
+        
+        return ids
+    
     def _add_movie_metadata(self, movie, library_key: str):
         """Add new movie metadata to database (reuses content discovery logic)."""
-        from .content_discovery import PlexContentDiscoveryService
-        discovery_service = PlexContentDiscoveryService()
-        # Use the existing movie discovery logic
-        discovery_service._process_single_movie(movie, library_key, "Incremental Sync")
+        try:
+            # Extract external IDs  
+            external_ids = self._extract_external_ids(movie)
+            
+            # Get file path from media parts
+            file_path = None
+            if movie.media and len(movie.media) > 0:
+                if movie.media[0].parts and len(movie.media[0].parts) > 0:
+                    file_path = movie.media[0].parts[0].file
+            
+            # Create movie data matching TablePlexMovies schema
+            movie_data = {
+                'plexId': movie.ratingKey,
+                'plexGuid': str(movie.guid) if hasattr(movie, 'guid') else None,
+                'title': movie.title,
+                'year': movie.year,
+                'imdbId': external_ids.get('imdbId'),
+                'tmdbId': external_ids.get('tmdbId'),
+                'path': file_path or '',
+                'overview': movie.summary[:1024] if movie.summary else None,
+                'poster': movie.posterUrl if hasattr(movie, 'posterUrl') else None,
+                'fanart': movie.artUrl if hasattr(movie, 'artUrl') else None,
+                'duration': movie.duration if hasattr(movie, 'duration') else None,
+                'rating': float(movie.audienceRating) if hasattr(movie, 'audienceRating') and movie.audienceRating is not None else None,
+                'studio': movie.studio if hasattr(movie, 'studio') else None,
+                'genres': ', '.join([g.tag for g in movie.genres]) if hasattr(movie, 'genres') else None,
+                'directors': ', '.join([d.tag for d in movie.directors]) if hasattr(movie, 'directors') else None,
+                'writers': ', '.join([w.tag for w in movie.writers]) if hasattr(movie, 'writers') else None,
+                'actors': ', '.join([a.tag for a in movie.actors[:10]]) if hasattr(movie, 'actors') else None,
+                'profileId': None
+            }
+            
+            # Insert new movie
+            database.execute(insert(TablePlexMovies).values(movie_data))
+            logger.debug(f"Added movie: {movie.title}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add movie {movie.title}: {e}")
+            raise
     
     def _add_show_metadata(self, show, library_key: str):
         """Add new show metadata to database (reuses content discovery logic)."""
-        from .content_discovery import PlexContentDiscoveryService
-        discovery_service = PlexContentDiscoveryService()
-        # Use the existing show discovery logic
-        discovery_service._process_single_show(show, library_key, "Incremental Sync")
+        try:
+            import os
+            
+            # Extract external IDs for show
+            external_ids = self._extract_external_ids(show)
+            
+            # Get show path from first episode
+            show_path = None
+            try:
+                first_season = show.seasons()[0] if show.seasons() else None
+                if first_season:
+                    first_episode = first_season.episodes()[0] if first_season.episodes() else None
+                    if first_episode and first_episode.media and len(first_episode.media) > 0:
+                        if first_episode.media[0].parts and len(first_episode.media[0].parts) > 0:
+                            # Extract show directory from episode path
+                            episode_path = first_episode.media[0].parts[0].file
+                            if episode_path:
+                                show_path = os.path.dirname(os.path.dirname(episode_path))
+            except:
+                pass
+            
+            # Create show data matching TablePlexShows schema
+            show_data = {
+                'plexId': show.ratingKey,
+                'plexGuid': str(show.guid) if hasattr(show, 'guid') else None,
+                'title': show.title,
+                'year': show.year,
+                'imdbId': external_ids.get('imdbId'),
+                'tvdbId': int(external_ids['tvdbId']) if external_ids.get('tvdbId') and external_ids['tvdbId'].isdigit() else None,
+                'tmdbId': external_ids.get('tmdbId'),
+                'path': show_path if show_path else f"show_{show.ratingKey}",
+                'overview': show.summary[:1024] if show.summary else None,
+                'poster': show.posterUrl if hasattr(show, 'posterUrl') else None,
+                'fanart': show.artUrl if hasattr(show, 'artUrl') else None,
+                'network': show.studio if hasattr(show, 'studio') else None,
+                'status': show.status if hasattr(show, 'status') else None
+            }
+            
+            # Insert new show
+            database.execute(insert(TablePlexShows).values(show_data))
+            logger.debug(f"Added show: {show.title}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add show {show.title}: {e}")
+            raise
     
     def _add_episode_metadata(self, episode, show_plex_id: str):
         """Add new episode metadata to database (reuses content discovery logic)."""
-        from .content_discovery import PlexContentDiscoveryService
-        discovery_service = PlexContentDiscoveryService()
-        # Use the existing episode discovery logic
-        discovery_service._process_single_episode(episode, show_plex_id)
+        try:
+            # Get season and episode numbers
+            season_number = episode.seasonNumber if hasattr(episode, 'seasonNumber') else 0
+            episode_number = episode.episodeNumber if hasattr(episode, 'episodeNumber') else 0
+            
+            # Get file path from media parts
+            file_path = None
+            if episode.media and len(episode.media) > 0:
+                if episode.media[0].parts and len(episode.media[0].parts) > 0:
+                    file_path = episode.media[0].parts[0].file
+            
+            # Create episode data matching TablePlexEpisodes schema
+            episode_data = {
+                'plexId': episode.ratingKey,
+                'plexShowId': show_plex_id,
+                'plexGuid': str(episode.guid) if hasattr(episode, 'guid') else None,
+                'title': episode.title,
+                'season': season_number,
+                'episode': episode_number,
+                'path': file_path or '',
+                'overview': episode.summary[:1024] if episode.summary else None,
+                'duration': episode.duration if hasattr(episode, 'duration') else None,
+                'aired': episode.originallyAvailableAt.strftime('%Y-%m-%d') if hasattr(episode, 'originallyAvailableAt') and episode.originallyAvailableAt else None,
+                'profileId': None
+            }
+            
+            # Insert new episode
+            database.execute(insert(TablePlexEpisodes).values(episode_data))
+            logger.debug(f"Added episode: {episode.title}")
+            
+        except Exception as e:
+            logger.error(f"Failed to add episode {episode.title}: {e}")
+            raise
+
+    def _sync_movies_full(self, section, library_key: str) -> int:
+        """
+        Sync all movies in a library (full synchronization).
+        """
+        updated_count = 0
+        
+        try:
+            # Get all movies from Plex
+            movies = section.all()
+            logger.info(f"Found {len(movies)} movies in library")
+            
+            for movie in movies:
+                try:
+                    # Check if movie exists in database
+                    existing = database.execute(
+                        select(TablePlexMovies)
+                        .where(TablePlexMovies.plexId == str(movie.ratingKey))
+                    ).first()
+                    
+                    if existing:
+                        # Update existing movie
+                        self._update_movie_metadata(movie, library_key)
+                    else:
+                        # Add new movie
+                        self._add_movie_metadata(movie, library_key)
+                    
+                    updated_count += 1
+                    
+                    # Log progress every 10 items
+                    if updated_count % 10 == 0:
+                        logger.debug(f"Processed {updated_count}/{len(movies)} movies")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to process movie {movie.title}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to sync movies for library {library_key}: {e}")
+            
+        return updated_count
+    
+    def _sync_shows_full(self, section, library_key: str) -> int:
+        """
+        Sync all shows in a library (full synchronization).
+        """
+        updated_count = 0
+        
+        try:
+            # Get all shows from Plex
+            shows = section.all()
+            logger.info(f"Found {len(shows)} shows in library")
+            
+            for show in shows:
+                try:
+                    # Check if show exists in database
+                    existing = database.execute(
+                        select(TablePlexShows)
+                        .where(TablePlexShows.plexId == str(show.ratingKey))
+                    ).first()
+                    
+                    if existing:
+                        # Update existing show
+                        self._update_show_metadata(show, library_key)
+                    else:
+                        # Add new show
+                        self._add_show_metadata(show, library_key)
+                    
+                    updated_count += 1
+                    
+                    # Log progress every 5 items (shows have more episodes)
+                    if updated_count % 5 == 0:
+                        logger.debug(f"Processed {updated_count}/{len(shows)} shows")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to process show {show.title}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to sync shows for library {library_key}: {e}")
+            
+        return updated_count
 
 
 def sync_plex_libraries(full_sync: bool = True, cleanup_removed: bool = True, 
