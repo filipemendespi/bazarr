@@ -2,7 +2,7 @@
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
-from app.database import TableMovies, database, update, select, func
+from app.database import TableMovies, TablePlexMovies, database, update, select, func
 from radarr.sync.movies import update_one_movie
 from subtitles.indexer.movies import list_missing_subtitles_movies, movies_scan_subtitles
 from app.event_handler import event_stream
@@ -11,6 +11,7 @@ from subtitles.mass_download import movies_download_subtitles
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
 from api.utils import authenticate, None_Keys, postprocess
+from app.config import settings
 
 api_ns_movies = Namespace('Movies', description='List movies metadata, update movie languages profile or run actions '
                                                 'for specific movies.')
@@ -111,6 +112,62 @@ class Movies(Resource):
             select(func.count())
             .select_from(TableMovies)) \
             .scalar()
+
+        # Include Plex movies if Plex integration is enabled
+        if settings.general.use_plex:
+            plex_stmt = select(
+                TablePlexMovies.title.label('title'),
+                TablePlexMovies.year.label('year'),
+                TablePlexMovies.path.label('path'),
+                TablePlexMovies.imdbId.label('imdbId'),
+                TablePlexMovies.overview.label('overview'),
+                TablePlexMovies.poster.label('poster'),
+                TablePlexMovies.fanart.label('fanart'),
+                TablePlexMovies.audio_language.label('audio_language'),
+                TablePlexMovies.subtitles.label('subtitles'),
+                TablePlexMovies.missing_subtitles.label('missing_subtitles'),
+                TablePlexMovies.profileId.label('profileId'),
+                TablePlexMovies.plexId.label('radarrId'),  # Use plexId as radarrId for compatibility
+                TablePlexMovies.monitored.label('monitored')
+            ).order_by(TablePlexMovies.title)
+            
+            # Apply filters if specific movie IDs requested
+            if len(radarrId) != 0:
+                plex_stmt = plex_stmt.where(TablePlexMovies.plexId.in_(radarrId))
+            
+            # Apply pagination for general requests
+            if length > 0 and len(radarrId) == 0:
+                plex_stmt = plex_stmt.limit(length).offset(start)
+                
+            # Execute Plex query and process results
+            plex_results = [postprocess({
+                'alternativeTitles': '[]',  # Plex doesn't have this field
+                'audio_language': x.audio_language,
+                'fanart': x.fanart,
+                'imdbId': x.imdbId,
+                'missing_subtitles': x.missing_subtitles if x.missing_subtitles else '[]',
+                'monitored': x.monitored == 1,  # Convert to boolean
+                'overview': x.overview,
+                'path': x.path,
+                'poster': x.poster,
+                'profileId': x.profileId,
+                'radarrId': x.radarrId,  # This is actually plexId
+                'sceneName': '',  # Plex doesn't have sceneName
+                'subtitles': x.subtitles if x.subtitles else '[]',
+                'tags': '[]',  # Plex doesn't have tags - pass as string for ast.literal_eval
+                'title': f"[Plex] {x.title}",  # Add [Plex] prefix to distinguish
+                'year': str(x.year) if x.year else '',  # Convert to string for consistency
+            }) for x in database.execute(plex_stmt).all()]
+            
+            # Combine results
+            results.extend(plex_results)
+            
+            # Update count to include Plex movies
+            plex_count = database.execute(
+                select(func.count())
+                .select_from(TablePlexMovies)) \
+                .scalar()
+            count += plex_count
 
         return marshal({'data': results, 'total': count}, self.get_response_model)
 

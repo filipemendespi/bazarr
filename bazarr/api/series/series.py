@@ -5,7 +5,7 @@ import operator
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from functools import reduce
 
-from app.database import get_exclusion_clause, TableEpisodes, TableShows, database, select, update, func
+from app.database import get_exclusion_clause, TableEpisodes, TableShows, TablePlexShows, TablePlexEpisodes, database, select, update, func
 from sonarr.sync.series import update_one_series
 from subtitles.indexer.series import list_missing_subtitles, series_scan_subtitles
 from subtitles.mass_download import series_download_subtitles
@@ -14,6 +14,7 @@ from app.event_handler import event_stream
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
 from api.utils import authenticate, None_Keys, postprocess
+from app.config import settings
 
 api_ns_series = Namespace('Series', description='List series metadata, update series languages profile or run actions '
                                                 'for specific series.')
@@ -143,6 +144,91 @@ class Series(Resource):
             select(func.count())
             .select_from(TableShows)) \
             .scalar()
+
+        # Include Plex shows if Plex integration is enabled
+        if settings.general.use_plex:
+            # Count episodes for Plex shows
+            plex_episodeFileCount = select(TablePlexShows.plexId,
+                                          func.count(TablePlexEpisodes.plexId).label('episodeFileCount')) \
+                .select_from(TablePlexEpisodes) \
+                .join(TablePlexShows) \
+                .group_by(TablePlexShows.plexId)\
+                .subquery()
+
+            # Count missing subtitles for Plex episodes
+            plex_episodes_missing_conditions = [(TablePlexEpisodes.missing_subtitles.is_not(None)),
+                                               (TablePlexEpisodes.missing_subtitles != '[]')]
+
+            plex_episodeMissingCount = select(TablePlexShows.plexId,
+                                             func.count(TablePlexEpisodes.plexId).label('episodeMissingCount')) \
+                .select_from(TablePlexEpisodes) \
+                .join(TablePlexShows) \
+                .where(reduce(operator.and_, plex_episodes_missing_conditions)) \
+                .group_by(TablePlexShows.plexId)\
+                .subquery()
+
+            plex_stmt = select(TablePlexShows.tvdbId,
+                              TablePlexShows.alternativeTitles,
+                              TablePlexShows.audio_language,
+                              TablePlexShows.fanart,
+                              TablePlexShows.imdbId,
+                              TablePlexShows.monitored,
+                              TablePlexShows.overview,
+                              TablePlexShows.path,
+                              TablePlexShows.poster,
+                              TablePlexShows.profileId,
+                              TablePlexShows.seriesType,
+                              TablePlexShows.plexId.label('sonarrSeriesId'),  # Use plexId as sonarrSeriesId for compatibility
+                              TablePlexShows.tags,
+                              TablePlexShows.title,
+                              TablePlexShows.year,
+                              TablePlexShows.ended,
+                              TablePlexShows.lastAired,
+                              plex_episodeFileCount.c.episodeFileCount,
+                              plex_episodeMissingCount.c.episodeMissingCount) \
+                .select_from(TablePlexShows) \
+                .join(plex_episodeFileCount, TablePlexShows.plexId == plex_episodeFileCount.c.plexId, isouter=True) \
+                .join(plex_episodeMissingCount, TablePlexShows.plexId == plex_episodeMissingCount.c.plexId, isouter=True)\
+                .order_by(TablePlexShows.sortTitle)
+
+            # Apply filters if specific series IDs requested
+            if len(seriesId) != 0:
+                plex_stmt = plex_stmt.where(TablePlexShows.plexId.in_(seriesId))
+            elif length > 0:
+                plex_stmt = plex_stmt.limit(length).offset(start)
+
+            # Execute Plex query and process results
+            plex_results = [postprocess({
+                'tvdbId': x.tvdbId,
+                'alternativeTitles': x.alternativeTitles if x.alternativeTitles else '[]',
+                'audio_language': x.audio_language,
+                'fanart': x.fanart,
+                'imdbId': x.imdbId,
+                'monitored': x.monitored == 1,  # Convert to boolean
+                'overview': x.overview,
+                'path': x.path,
+                'poster': x.poster,
+                'profileId': x.profileId,
+                'seriesType': x.seriesType,
+                'sonarrSeriesId': x.sonarrSeriesId,  # This is actually plexId
+                'tags': x.tags if x.tags else '[]',
+                'title': f"[Plex] {x.title}",  # Add [Plex] prefix to distinguish
+                'year': str(x.year) if x.year else '',
+                'ended': x.ended == 1,  # Convert to boolean
+                'lastAired': x.lastAired,
+                'episodeFileCount': x.episodeFileCount if x.episodeFileCount else 0,
+                'episodeMissingCount': x.episodeMissingCount if x.episodeMissingCount else 0,
+            }) for x in database.execute(plex_stmt).all()]
+            
+            # Combine results
+            results.extend(plex_results)
+            
+            # Update count to include Plex shows
+            plex_count = database.execute(
+                select(func.count())
+                .select_from(TablePlexShows)) \
+                .scalar()
+            count += plex_count
 
         return marshal({'data': results, 'total': count}, self.get_response_model)
 

@@ -53,13 +53,25 @@ def postprocess(item):
 
     # Parse alternate titles
     if item.get('alternativeTitles'):
-        item['alternativeTitles'] = ast.literal_eval(item['alternativeTitles'])
+        if isinstance(item['alternativeTitles'], str):
+            try:
+                item['alternativeTitles'] = ast.literal_eval(item['alternativeTitles'])
+            except (ValueError, SyntaxError):
+                item['alternativeTitles'] = []
+        elif not isinstance(item['alternativeTitles'], list):
+            item['alternativeTitles'] = []
     else:
         item['alternativeTitles'] = []
 
     # Parse subtitles
     if item.get('subtitles'):
-        item['subtitles'] = ast.literal_eval(item['subtitles'])
+        if isinstance(item['subtitles'], str):
+            try:
+                item['subtitles'] = ast.literal_eval(item['subtitles'])
+            except (ValueError, SyntaxError):
+                item['subtitles'] = []
+        elif not isinstance(item['subtitles'], list):
+            item['subtitles'] = []
         for i, subs in enumerate(item['subtitles']):
             language = subs[0].split(':')
             file_size = subs[2] if len(subs) > 2 else 0
@@ -86,7 +98,13 @@ def postprocess(item):
 
     # Parse missing subtitles
     if item.get('missing_subtitles'):
-        item['missing_subtitles'] = ast.literal_eval(item['missing_subtitles'])
+        if isinstance(item['missing_subtitles'], str):
+            try:
+                item['missing_subtitles'] = ast.literal_eval(item['missing_subtitles'])
+            except (ValueError, SyntaxError):
+                item['missing_subtitles'] = []
+        elif not isinstance(item['missing_subtitles'], list):
+            item['missing_subtitles'] = []
         for i, subs in enumerate(item['missing_subtitles']):
             language = subs.split(':')
             item['missing_subtitles'][i] = {"name": language_from_alpha2(language[0]),
@@ -106,15 +124,38 @@ def postprocess(item):
 
     # Parse tags
     if item.get('tags') is not None:
-        item['tags'] = ast.literal_eval(item.get('tags', '[]'))
+        if isinstance(item['tags'], str):
+            try:
+                item['tags'] = ast.literal_eval(item.get('tags', '[]'))
+            except (ValueError, SyntaxError):
+                item['tags'] = []
+        elif isinstance(item['tags'], list):
+            # Already a list (Plex data)
+            pass
+        else:
+            item['tags'] = []
     else:
         item['tags'] = []
-    if item.get('monitored'):
-        item['monitored'] = item.get('monitored') == 'True'
+    if item.get('monitored') is not None:
+        if isinstance(item['monitored'], bool):
+            # Already boolean (Plex data)
+            pass
+        elif isinstance(item['monitored'], (int, str)):
+            # Convert int or string to boolean (Radarr/Sonarr data)
+            item['monitored'] = str(item['monitored']) == 'True' or item['monitored'] == 1
+        else:
+            item['monitored'] = False
     else:
         item['monitored'] = False
-    if item.get('hearing_impaired'):
-        item['hearing_impaired'] = item.get('hearing_impaired') == 'True'
+    if item.get('hearing_impaired') is not None:
+        if isinstance(item['hearing_impaired'], bool):
+            # Already boolean (Plex data)
+            pass
+        elif isinstance(item['hearing_impaired'], (int, str)):
+            # Convert int or string to boolean (Radarr/Sonarr data)
+            item['hearing_impaired'] = str(item['hearing_impaired']) == 'True' or item['hearing_impaired'] == 1
+        else:
+            item['hearing_impaired'] = False
     else:
         item['hearing_impaired'] = False
 
