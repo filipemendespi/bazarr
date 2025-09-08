@@ -164,21 +164,21 @@ class PlexLibrarySyncService:
             else:
                 # Insert new library
                 new_library = TablePlexLibraries(**library_data)
-                database.session.add(new_library)
+                database.add(new_library)
                 logger.info(f"Added new library: {library_data['title']}")
                 self.sync_stats['libraries_added'] += 1
             
-            database.session.commit()
+            database.commit()
             self.sync_stats['libraries_processed'] += 1
             return True
             
         except SQLAlchemyError as e:
-            database.session.rollback()
+            database.rollback()
             logger.error(f"Database error syncing library {library_data.get('title', 'Unknown')}: {e}")
             self.sync_stats['errors'].append(f"DB error for library {library_data.get('title')}: {str(e)}")
             return False
         except Exception as e:
-            database.session.rollback()
+            database.rollback()
             logger.error(f"Unexpected error syncing library {library_data.get('title', 'Unknown')}: {e}")
             self.sync_stats['errors'].append(f"Sync error for library {library_data.get('title')}: {str(e)}")
             return False
@@ -214,11 +214,11 @@ class PlexLibrarySyncService:
                 .where(TablePlexLibraries.key == library_key)
                 .values(last_scan=datetime.now(timezone.utc))
             )
-            database.session.commit()
+            database.commit()
             logger.debug(f"Updated scan time for library {library_key}")
             return True
         except Exception as e:
-            database.session.rollback()
+            database.rollback()
             logger.error(f"Failed to update scan time for library {library_key}: {e}")
             return False
     
@@ -242,13 +242,13 @@ class PlexLibrarySyncService:
                     delete(TablePlexLibraries)
                     .where(~TablePlexLibraries.key.in_(current_library_keys))
                 )
-                database.session.commit()
+                database.commit()
                 logger.info(f"Removed {removed_count} libraries that no longer exist in Plex")
             
             return removed_count
             
         except Exception as e:
-            database.session.rollback()
+            database.rollback()
             logger.error(f"Failed to cleanup removed libraries: {e}")
             return 0
     
