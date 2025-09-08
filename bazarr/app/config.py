@@ -261,6 +261,26 @@ validators = [
     Validator('plex.migration_successful', must_exist=True, default=False, is_type_of=bool),
     Validator('plex.migration_timestamp', must_exist=True, default='', is_type_of=(int, float, str)),
     Validator('plex.disable_auto_migration', must_exist=True, default=False, is_type_of=bool),
+    
+    # Plex Sync Configuration (Phase 2.5)
+    Validator('plex.sync_enabled', must_exist=True, default=False, is_type_of=bool),
+    Validator('plex.sync_libraries', must_exist=True, default=[], is_type_of=list),
+    Validator('plex.sync_frequency', must_exist=True, default=60, is_type_of=int,
+              is_in=[15, 30, 60, 120, 180, 360, 720, 1440, 10080, ONE_HUNDRED_YEARS_IN_MINUTES]),
+    Validator('plex.sync_full_update', must_exist=True, default='Daily', is_type_of=str,
+              is_in=['Manually', 'Daily', 'Weekly']),
+    Validator('plex.sync_full_update_day', must_exist=True, default=6, is_type_of=int, gte=0, lte=6),
+    Validator('plex.sync_full_update_hour', must_exist=True, default=4, is_type_of=int, gte=0, lte=23),
+    Validator('plex.conflict_resolution_strategy', must_exist=True, default='plex_wins', is_type_of=str,
+              is_in=['plex_wins', 'database_wins', 'merge_metadata', 'manual_review']),
+    Validator('plex.sync_movie_libraries', must_exist=True, default=True, is_type_of=bool),
+    Validator('plex.sync_show_libraries', must_exist=True, default=True, is_type_of=bool),
+    Validator('plex.webhook_sync_enabled', must_exist=True, default=True, is_type_of=bool),
+    Validator('plex.retry_failed_sync', must_exist=True, default=True, is_type_of=bool),
+    Validator('plex.max_retry_attempts', must_exist=True, default=3, is_type_of=int, gte=1, lte=10),
+    Validator('plex.retry_delay_minutes', must_exist=True, default=5, is_type_of=int, gte=1, lte=60),
+    Validator('plex.health_check_enabled', must_exist=True, default=True, is_type_of=bool),
+    Validator('plex.health_check_interval', must_exist=True, default=300, is_type_of=int, gte=60, lte=3600),
 
     # proxy section
     Validator('proxy.type', must_exist=True, default=None, is_type_of=(NoneType, str),
@@ -629,6 +649,7 @@ def save_settings(settings_items):
     update_schedule = False
     sonarr_changed = False
     radarr_changed = False
+    plex_sync_changed = False
     update_path_map = False
     configure_proxy = False
     exclusion_updated = False
@@ -707,11 +728,13 @@ def save_settings(settings_items):
                    'settings-deathbycaptcha-username', 'settings-deathbycaptcha-password']:
             configure_captcha = True
 
-        if key in ['update_schedule', 'settings-general-use_sonarr', 'settings-general-use_radarr',
+        if key in ['update_schedule', 'settings-general-use_sonarr', 'settings-general-use_radarr', 'settings-general-use_plex',
                    'settings-general-auto_update', 'settings-general-upgrade_subs',
                    'settings-sonarr-series_sync', 'settings-radarr-movies_sync',
                    'settings-sonarr-full_update', 'settings-sonarr-full_update_day', 'settings-sonarr-full_update_hour',
                    'settings-radarr-full_update', 'settings-radarr-full_update_day', 'settings-radarr-full_update_hour',
+                   'settings-plex-sync_frequency', 'settings-plex-sync_full_update', 'settings-plex-sync_full_update_day', 
+                   'settings-plex-sync_full_update_hour', 'settings-plex-health_check_interval',
                    'settings-general-wanted_search_frequency', 'settings-general-wanted_search_frequency_movie',
                    'settings-general-upgrade_frequency', 'settings-backup-frequency', 'settings-backup-day',
                    'settings-backup-hour']:
@@ -724,6 +747,15 @@ def save_settings(settings_items):
         if key in ['settings-general-use_radarr', 'settings-radarr-ip', 'settings-radarr-port',
                    'settings-radarr-base_url', 'settings-radarr-ssl', 'settings-radarr-apikey']:
             radarr_changed = True
+
+        if key in ['settings-general-use_plex', 'settings-plex-sync_enabled', 'settings-plex-sync_libraries',
+                   'settings-plex-sync_frequency', 'settings-plex-sync_full_update', 'settings-plex-sync_full_update_day',
+                   'settings-plex-sync_full_update_hour', 'settings-plex-conflict_resolution_strategy',
+                   'settings-plex-sync_movie_libraries', 'settings-plex-sync_show_libraries',
+                   'settings-plex-webhook_sync_enabled', 'settings-plex-retry_failed_sync',
+                   'settings-plex-max_retry_attempts', 'settings-plex-retry_delay_minutes',
+                   'settings-plex-health_check_enabled', 'settings-plex-health_check_interval']:
+            plex_sync_changed = True
 
         if key in ['settings-general-path_mappings', 'settings-general-path_mappings_movie']:
             update_path_map = True
@@ -886,6 +918,12 @@ def save_settings(settings_items):
                 radarr_signalr_client.restart()
             except Exception:
                 pass
+
+        if plex_sync_changed:
+            from .scheduler import scheduler
+            from .event_handler import event_stream
+            scheduler.update_configurable_tasks()
+            event_stream(type='task')
 
         if update_path_map:
             from utilities.path_mappings import path_mappings

@@ -1,0 +1,142 @@
+.libraryManagementSection {
+  .summaryStats {
+    padding: 1rem;
+    background-color: var(--mantine-color-gray-0);
+    border-radius: var(--mantine-radius-sm);
+
+    [data-mantine-color-scheme="dark"] & {
+      background-color: var(--mantine-color-dark-6);
+    }
+  }
+
+  .tableContainer {
+    overflow-x: auto;
+    border-radius: var(--mantine-radius-sm);
+    border: 1px solid var(--mantine-color-gray-3);
+
+    [data-mantine-color-scheme="dark"] & {
+      border-color: var(--mantine-color-dark-4);
+    }
+
+    table {
+      min-width: 800px;
+    }
+  }
+
+  .expandedConfig {
+    background-color: var(--mantine-color-blue-0);
+    border-color: var(--mantine-color-blue-3);
+
+    [data-mantine-color-scheme="dark"] & {
+      background-color: var(--mantine-color-dark-7);
+      border-color: var(--mantine-color-blue-7);
+    }
+  }
+
+  .errorIcon {
+    color: var(--mantine-color-red-6);
+    font-size: 12px;
+    animation: pulse 2s ease-in-out infinite alternate;
+  }
+
+  .libraryName {
+    .libraryTitle {
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+
+    .libraryId {
+      font-family: var(--mantine-font-family-monospace);
+      font-size: 11px;
+      opacity: 0.7;
+    }
+  }
+
+  .actionButton {
+    &:disabled {
+      opacity: 0.5;
+    }
+
+    &.syncing {
+      animation: spin 1s linear infinite;
+    }
+  }
+
+  .configSection {
+    border-top: 1px solid var(--mantine-color-gray-2);
+    margin-top: 1rem;
+    padding-top: 1rem;
+
+    [data-mantine-color-scheme="dark"] & {
+      border-color: var(--mantine-color-dark-4);
+    }
+  }
+
+  // Status badge animations
+  .statusBadge {
+    &[data-color="blue"] {
+      animation: pulse 2s ease-in-out infinite alternate;
+    }
+  }
+
+  // Priority selector styling
+  .prioritySelect {
+    min-width: 100px;
+  }
+
+  // Responsive design
+  @media (max-width: 1200px) {
+    .tableContainer table {
+      min-width: 700px;
+    }
+
+    .summaryStats {
+      flex-direction: column;
+      gap: 1rem;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .tableContainer {
+      .mantine-Table-th,
+      .mantine-Table-td {
+        padding: 8px 4px;
+        font-size: 12px;
+      }
+    }
+
+    .summaryStats {
+      padding: 0.75rem;
+      text-align: center;
+    }
+
+    .expandedConfig {
+      padding: 0.75rem;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .tableContainer table {
+      min-width: 600px;
+    }
+  }
+}
+
+// Animations
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.6;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

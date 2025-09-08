@@ -12,9 +12,9 @@ from app.database import (TableEpisodes, TableShows, TableMovies, database, sele
                         TablePlexLibraries, TablePlexMovies, TablePlexShows, TablePlexEpisodes)
 from subtitles.mass_download import episode_download_subtitles, movies_download_subtitles
 from app.logger import logger
-from ..plex.security import sanitize_log_data
-from ..plex.operations import get_plex_server
-from ..plex.content_discovery import PlexContentDiscoveryService
+from api.plex.security import sanitize_log_data
+from plex.operations import get_plex_server
+from plex.content_discovery import PlexContentDiscoveryService
 from datetime import datetime, timezone
 
 from ..utils import authenticate

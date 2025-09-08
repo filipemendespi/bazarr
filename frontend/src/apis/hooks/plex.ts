@@ -187,3 +187,144 @@ export const usePlexWebhookDeleteMutation = () => {
     },
   });
 };
+
+// Sync Configuration Hooks
+export const usePlexSyncSettingsQuery = <TData = Plex.SyncSettings>(
+  options?: Partial<
+    UseQueryOptions<Plex.SyncSettings, Error, TData, (string | boolean)[]>
+  > & { enabled?: boolean },
+) => {
+  const enabled = options?.enabled ?? true;
+
+  return useQuery({
+    queryKey: [QueryKeys.Plex, "sync", "settings"],
+    queryFn: () => api.plex.getSyncSettings(),
+    enabled,
+    staleTime: 1000 * 60 * 2, // Cache for 2 minutes
+    refetchOnWindowFocus: false,
+    ...options,
+  });
+};
+
+export const usePlexSyncSettingsMutation = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (settings: Partial<Plex.SyncSettings>) =>
+      api.plex.updateSyncSettings(settings),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "sync", "settings"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "sync", "status"],
+      });
+    },
+  });
+};
+
+export const usePlexSyncStatusQuery = <TData = Plex.SyncStatus>(
+  options?: Partial<
+    UseQueryOptions<Plex.SyncStatus, Error, TData, (string | boolean)[]>
+  > & { enabled?: boolean; refetchInterval?: number },
+) => {
+  const enabled = options?.enabled ?? true;
+  const refetchInterval = options?.refetchInterval ?? 30000; // 30 seconds default
+
+  return useQuery({
+    queryKey: [QueryKeys.Plex, "sync", "status"],
+    queryFn: () => api.plex.getSyncStatus(),
+    enabled,
+    refetchInterval: refetchInterval,
+    staleTime: 1000 * 15, // Consider data stale after 15 seconds
+    refetchOnWindowFocus: true,
+    ...options,
+  });
+};
+
+export const usePlexSyncTriggerMutation = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: {
+      type: "full" | "incremental";
+      library_id?: string;
+    }) => api.plex.triggerSync(params),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "sync", "status"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "sync", "history"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "libraries", "management"],
+      });
+    },
+  });
+};
+
+export const usePlexSyncHistoryQuery = <TData = Plex.SyncHistoryResponse>(
+  params?: { page?: number; limit?: number },
+  options?: Partial<
+    UseQueryOptions<Plex.SyncHistoryResponse, Error, TData, (string | number)[]>
+  > & { enabled?: boolean },
+) => {
+  const enabled = options?.enabled ?? true;
+
+  return useQuery({
+    queryKey: [
+      QueryKeys.Plex,
+      "sync",
+      "history",
+      params?.page || 1,
+      params?.limit || 25,
+    ],
+    queryFn: () => api.plex.getSyncHistory(params),
+    enabled,
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+    refetchOnWindowFocus: false,
+    ...options,
+  });
+};
+
+export const usePlexLibraryManagementQuery = <TData = Plex.LibraryManagement[]>(
+  options?: Partial<
+    UseQueryOptions<
+      Plex.LibraryManagement[],
+      Error,
+      TData,
+      (string | boolean)[]
+    >
+  > & { enabled?: boolean },
+) => {
+  const enabled = options?.enabled ?? true;
+
+  return useQuery({
+    queryKey: [QueryKeys.Plex, "libraries", "management"],
+    queryFn: () => api.plex.getLibraryManagement(),
+    enabled,
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
+    refetchOnWindowFocus: false,
+    ...options,
+  });
+};
+
+export const usePlexLibrarySettingsMutation = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: {
+      libraryId: string;
+      settings: Partial<Plex.LibrarySettings>;
+    }) => api.plex.updateLibrarySettings(params.libraryId, params.settings),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "libraries", "management"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: [QueryKeys.Plex, "sync", "status"],
+      });
+    },
+  });
+};

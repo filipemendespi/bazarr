@@ -82,6 +82,64 @@ class NewPlexApi extends BaseApi {
 
     return response.data;
   }
+
+  // Sync Configuration APIs
+  async getSyncSettings() {
+    const response =
+      await this.get<DataWrapper<Plex.SyncSettings>>("/sync/settings");
+    return response.data;
+  }
+
+  async updateSyncSettings(settings: Partial<Plex.SyncSettings>) {
+    const response = await this.post<DataWrapper<Plex.SyncSettings>>(
+      "/sync/settings",
+      settings,
+    );
+    return response.data;
+  }
+
+  async getSyncStatus() {
+    const response =
+      await this.get<DataWrapper<Plex.SyncStatus>>("/sync/status");
+    return response.data;
+  }
+
+  async triggerSync(params: {
+    type: "full" | "incremental";
+    library_id?: string;
+  }) {
+    const response = await this.post<DataWrapper<Plex.SyncResult>>(
+      "/sync/trigger",
+      params,
+    );
+    return response.data;
+  }
+
+  async getSyncHistory(params?: { page?: number; limit?: number }) {
+    const response = await this.get<DataWrapper<Plex.SyncHistoryResponse>>(
+      "/sync/history",
+      { params },
+    );
+    return response.data;
+  }
+
+  async getLibraryManagement() {
+    const response = await this.get<DataWrapper<Plex.LibraryManagement[]>>(
+      "/sync/libraries/manage",
+    );
+    return response.data;
+  }
+
+  async updateLibrarySettings(
+    libraryId: string,
+    settings: Partial<Plex.LibrarySettings>,
+  ) {
+    const response = await this.post<DataWrapper<Plex.LibrarySettings>>(
+      `/sync/libraries/${libraryId}/settings`,
+      settings,
+    );
+    return response.data;
+  }
 }
 
 export default new NewPlexApi();

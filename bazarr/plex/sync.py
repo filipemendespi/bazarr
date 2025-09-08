@@ -5,15 +5,54 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Tuple
 import time
 
-from sqlalchemy import select, update, delete
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import select, update, delete, insert, text
+from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 
 from app.database import database, TablePlexLibraries, TablePlexShows, TablePlexEpisodes, TablePlexMovies
 from app.config import settings
 from .operations import get_plex_server
 from .conflict_resolution import create_conflict_resolver
+from .retry_service import retry_service, RetryOperation, RetryOperationType
 
 logger = logging.getLogger(__name__)
+
+
+def ensure_library_key_columns():
+    """
+    Ensure library_key columns exist in Plex content tables.
+    This is a temporary solution until the migration is run.
+    """
+    columns_added = False
+    
+    try:
+        # Check and add library_key to table_plex_movies if it doesn't exist
+        try:
+            result = database.execute(text("SELECT library_key FROM table_plex_movies LIMIT 1"))
+            result.close()
+        except Exception as e:
+            if "no such column" in str(e).lower():
+                logger.info("Adding library_key column to table_plex_movies")
+                database.execute(text("ALTER TABLE table_plex_movies ADD COLUMN library_key TEXT"))
+                columns_added = True
+            
+        # Check and add library_key to table_plex_shows if it doesn't exist
+        try:
+            result = database.execute(text("SELECT library_key FROM table_plex_shows LIMIT 1"))
+            result.close()
+        except Exception as e:
+            if "no such column" in str(e).lower():
+                logger.info("Adding library_key column to table_plex_shows")
+                database.execute(text("ALTER TABLE table_plex_shows ADD COLUMN library_key TEXT"))
+                columns_added = True
+                
+        # Commit changes if columns were added
+        if columns_added:
+            database.commit()
+            logger.info("Successfully added library_key columns to Plex tables")
+            
+    except Exception as e:
+        logger.warning(f"Could not ensure library_key columns exist: {e}")
+        # Non-critical error, continue execution
 
 
 class PlexLibrarySyncService:
@@ -218,6 +257,9 @@ class PlexLibrarySyncService:
         Perform complete library synchronization process.
         Returns sync statistics dictionary.
         """
+        # Ensure database has required columns
+        ensure_library_key_columns()
+        
         self.sync_stats['sync_start_time'] = datetime.now(timezone.utc)
         logger.info("Starting full library synchronization")
         
@@ -453,6 +495,20 @@ class PlexLibrarySyncService:
         except Exception as e:
             logger.error(f"Failed to sync library {library.title} incrementally: {e}")
             self.sync_stats['errors'].append(f"Incremental sync failed for library {library.title}: {str(e)}")
+            
+            # Add to retry queue if enabled
+            if getattr(settings.plex, 'retry_failed_sync', True):
+                retry_op = RetryOperation(
+                    operation_type=RetryOperationType.SYNC_LIBRARY,
+                    operation_data={
+                        'library_key': library.key,
+                        'library_title': library.title,
+                        'full_sync': False,
+                        'since_timestamp': since_timestamp.isoformat() if since_timestamp else None
+                    },
+                    error_message=str(e)
+                )
+                retry_service.add_retry_operation(retry_op)
         
         return updated_count
     
@@ -570,6 +626,19 @@ class PlexLibrarySyncService:
             
         except Exception as e:
             logger.error(f"Failed to update movie metadata for {movie.title}: {e}")
+            
+            # Add to retry queue if enabled
+            if getattr(settings.plex, 'retry_failed_sync', True):
+                retry_op = RetryOperation(
+                    operation_type=RetryOperationType.SYNC_MOVIE,
+                    operation_data={
+                        'plex_id': str(movie.ratingKey),
+                        'library_key': library_key,
+                        'title': movie.title
+                    },
+                    error_message=str(e)
+                )
+                retry_service.add_retry_operation(retry_op)
     
     def _update_show_metadata(self, show, library_key: str):
         """Update existing show metadata in database with conflict resolution."""
@@ -607,6 +676,19 @@ class PlexLibrarySyncService:
             
         except Exception as e:
             logger.error(f"Failed to update show metadata for {show.title}: {e}")
+            
+            # Add to retry queue if enabled
+            if getattr(settings.plex, 'retry_failed_sync', True):
+                retry_op = RetryOperation(
+                    operation_type=RetryOperationType.SYNC_SHOW,
+                    operation_data={
+                        'plex_id': str(show.ratingKey),
+                        'library_key': library_key,
+                        'title': show.title
+                    },
+                    error_message=str(e)
+                )
+                retry_service.add_retry_operation(retry_op)
     
     def _update_episode_metadata(self, episode, show_plex_id: str):
         """Update existing episode metadata in database with conflict resolution."""
@@ -644,6 +726,19 @@ class PlexLibrarySyncService:
             
         except Exception as e:
             logger.error(f"Failed to update episode metadata for {episode.title}: {e}")
+            
+            # Add to retry queue if enabled
+            if getattr(settings.plex, 'retry_failed_sync', True):
+                retry_op = RetryOperation(
+                    operation_type=RetryOperationType.SYNC_EPISODE,
+                    operation_data={
+                        'plex_id': str(episode.ratingKey),
+                        'show_plex_id': show_plex_id,
+                        'title': episode.title
+                    },
+                    error_message=str(e)
+                )
+                retry_service.add_retry_operation(retry_op)
     
     def _add_movie_metadata(self, movie, library_key: str):
         """Add new movie metadata to database (reuses content discovery logic)."""
@@ -680,6 +775,9 @@ def sync_plex_libraries(full_sync: bool = True, cleanup_removed: bool = True,
     Returns:
         Dictionary with sync statistics and results.
     """
+    # Ensure database has required columns
+    ensure_library_key_columns()
+    
     sync_service = PlexLibrarySyncService(conflict_strategy=conflict_strategy)
     
     if full_sync:

@@ -28,6 +28,14 @@ from utilities.cache import cache_maintenance
 from utilities.health import check_health
 from utilities.backup import backup_to_zip
 
+# Import Plex sync functions conditionally
+try:
+    from plex.sync import sync_plex_libraries
+    from plex.retry_worker import process_plex_retries
+    PLEX_AVAILABLE = True
+except ImportError:
+    PLEX_AVAILABLE = False
+
 from .config import settings
 from .get_args import args
 from .event_handler import event_stream
@@ -104,6 +112,9 @@ class Scheduler:
         self.__radarr_update_task()
         self.__sonarr_full_update_task()
         self.__radarr_full_update_task()
+        self.__plex_sync_task()
+        self.__plex_full_sync_task()
+        self.__plex_retry_task()
         self.__update_bazarr_task()
         self.__search_wanted_subtitles_task()
         self.__upgrade_subtitles_task()
@@ -214,6 +225,52 @@ class Scheduler:
                 update_movies, 'interval', minutes=int(settings.radarr.movies_sync), max_instances=1,
                 coalesce=True, misfire_grace_time=15, id='update_movies', name='Sync with Radarr',
                 replace_existing=True)
+
+    def __plex_sync_task(self):
+        if PLEX_AVAILABLE and getattr(settings, 'plex', None) and settings.plex.sync_enabled:
+            sync_interval = getattr(settings.plex, 'sync_frequency', 60)  # Default 60 minutes
+            self.aps_scheduler.add_job(
+                sync_plex_libraries, 'interval', minutes=int(sync_interval), max_instances=1,
+                coalesce=True, misfire_grace_time=15, id='sync_plex_incremental', 
+                name='Incremental Plex Sync', replace_existing=True,
+                kwargs={'full_sync': False, 'conflict_strategy': getattr(settings.plex, 'conflict_resolution_strategy', 'plex_wins')})
+    
+    def __plex_full_sync_task(self):
+        if PLEX_AVAILABLE and getattr(settings, 'plex', None) and settings.plex.sync_enabled:
+            full_sync_frequency = getattr(settings.plex, 'full_sync_frequency', 'Daily')
+            
+            if full_sync_frequency == "Daily":
+                hour = getattr(settings.plex, 'full_sync_hour', 3)  # Default 3 AM
+                self.aps_scheduler.add_job(
+                    sync_plex_libraries, 'cron', hour=hour, max_instances=1,
+                    coalesce=True, misfire_grace_time=15, id='sync_plex_full',
+                    name='Full Plex Sync', replace_existing=True,
+                    kwargs={'full_sync': True, 'cleanup_removed': True, 
+                           'conflict_strategy': getattr(settings.plex, 'conflict_resolution_strategy', 'plex_wins')})
+            elif full_sync_frequency == "Weekly":
+                day_of_week = getattr(settings.plex, 'full_sync_day', 0)  # Default Sunday
+                hour = getattr(settings.plex, 'full_sync_hour', 3)  # Default 3 AM
+                self.aps_scheduler.add_job(
+                    sync_plex_libraries, 'cron', day_of_week=day_of_week, hour=hour, max_instances=1,
+                    coalesce=True, misfire_grace_time=15, id='sync_plex_full',
+                    name='Full Plex Sync', replace_existing=True,
+                    kwargs={'full_sync': True, 'cleanup_removed': True,
+                           'conflict_strategy': getattr(settings.plex, 'conflict_resolution_strategy', 'plex_wins')})
+            elif full_sync_frequency == "Manually":
+                self.aps_scheduler.add_job(
+                    sync_plex_libraries, 'cron', year=in_a_century(), max_instances=1, coalesce=True,
+                    misfire_grace_time=15, id='sync_plex_full', name='Full Plex Sync',
+                    replace_existing=True,
+                    kwargs={'full_sync': True, 'cleanup_removed': True,
+                           'conflict_strategy': getattr(settings.plex, 'conflict_resolution_strategy', 'plex_wins')})
+
+    def __plex_retry_task(self):
+        if PLEX_AVAILABLE and getattr(settings, 'plex', None) and getattr(settings.plex, 'retry_failed_sync', True):
+            retry_interval = getattr(settings.plex, 'retry_delay_minutes', 15)
+            self.aps_scheduler.add_job(
+                process_plex_retries, 'interval', minutes=int(retry_interval), max_instances=1,
+                coalesce=True, misfire_grace_time=5, id='process_plex_retries',
+                name='Process Plex Retry Operations', replace_existing=True)
 
     def __cache_cleanup_task(self):
         self.aps_scheduler.add_job(cache_maintenance, 'interval', hours=24, max_instances=1, coalesce=True,

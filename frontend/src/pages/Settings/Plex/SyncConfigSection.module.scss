@@ -1,0 +1,80 @@
+.syncConfigSection {
+  .statusGroup {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+  }
+
+  .manualSyncGroup {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .configurationStack {
+    gap: 1rem;
+
+    .inputGroup {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+
+      > * {
+        flex: 1;
+        min-width: 200px;
+      }
+    }
+  }
+
+  .healthBadge {
+    &.healthy {
+      background-color: var(--mantine-color-green-light);
+      color: var(--mantine-color-green-dark);
+    }
+
+    &.warning {
+      background-color: var(--mantine-color-yellow-light);
+      color: var(--mantine-color-yellow-dark);
+    }
+
+    &.error {
+      background-color: var(--mantine-color-red-light);
+      color: var(--mantine-color-red-dark);
+    }
+  }
+
+  .statusBadge {
+    &.syncing {
+      background-color: var(--mantine-color-blue-light);
+      color: var(--mantine-color-blue-dark);
+    }
+
+    &.healthy {
+      background-color: var(--mantine-color-green-light);
+      color: var(--mantine-color-green-dark);
+    }
+
+    &.idle {
+      background-color: var(--mantine-color-gray-light);
+      color: var(--mantine-color-gray-dark);
+    }
+  }
+
+  @media (max-width: 768px) {
+    .inputGroup {
+      flex-direction: column;
+
+      > * {
+        min-width: unset;
+      }
+    }
+
+    .manualSyncGroup {
+      flex-direction: column;
+    }
+
+    .statusGroup {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+  }
+}

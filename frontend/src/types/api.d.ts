@@ -335,6 +335,96 @@ declare namespace Plex {
     webhooks: WebhookInfo[];
     count: number;
   }
+
+  // Sync Configuration Types
+  interface SyncSettings {
+    sync_enabled: boolean;
+    sync_frequency_seconds: number;
+    conflict_resolution_strategy:
+      | "plex_wins"
+      | "database_wins"
+      | "merge_metadata"
+      | "manual_review";
+    max_retries: number;
+    retry_delay_seconds: number;
+    batch_size: number;
+    cache_ttl_seconds: number;
+    webhook_enabled: boolean;
+    full_sync_on_startup: boolean;
+    incremental_sync_enabled: boolean;
+    health_check_enabled: boolean;
+  }
+
+  interface SyncStatus {
+    status: "idle" | "syncing" | "healthy" | "error" | "warning" | "unknown";
+    last_sync?: string;
+    next_sync?: string;
+    sync_in_progress: boolean;
+    current_operation?: string;
+    progress_percentage?: number;
+    health_score: number;
+    health_issues: string[];
+    total_movies: number;
+    total_shows: number;
+    total_episodes: number;
+    sync_errors: number;
+    cache_hit_rate: number;
+  }
+
+  interface SyncResult {
+    success: boolean;
+    message: string;
+    sync_id?: string;
+    started_at: string;
+    estimated_duration?: number;
+  }
+
+  interface SyncHistoryItem {
+    id: string;
+    sync_type: "full" | "incremental";
+    started_at: string;
+    completed_at?: string;
+    status: "running" | "completed" | "failed" | "cancelled";
+    items_processed: number;
+    items_added: number;
+    items_updated: number;
+    items_removed: number;
+    errors: number;
+    duration_seconds?: number;
+    error_message?: string;
+  }
+
+  interface SyncHistoryResponse {
+    items: SyncHistoryItem[];
+    total: number;
+    page: number;
+    limit: number;
+    has_next: boolean;
+    has_prev: boolean;
+  }
+
+  interface LibrarySettings {
+    library_id: string;
+    sync_enabled: boolean;
+    priority: number;
+    auto_subtitle_download: boolean;
+    language_profiles: string[];
+    exclude_tags: string[];
+    last_sync?: string;
+  }
+
+  interface LibraryManagement {
+    library_id: string;
+    name: string;
+    type: string;
+    count: number;
+    sync_enabled: boolean;
+    last_sync?: string;
+    sync_status: "idle" | "syncing" | "error";
+    error_count: number;
+    priority: number;
+    settings: LibrarySettings;
+  }
 }
 
 interface SearchResultType {

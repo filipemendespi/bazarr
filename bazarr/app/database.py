@@ -316,7 +316,43 @@ class TablePlexLibraries(Base):
     enabled = mapped_column(Integer, nullable=True, default=1)
     sync_enabled = mapped_column(Integer, nullable=True, default=1)
     last_scan = mapped_column(DateTime, nullable=True)
-    scan_interval = mapped_column(Integer, nullable=True, default=3600)
+    scan_interval = mapped_column(Integer, default=3600)  # seconds
+    created_at_timestamp = mapped_column(DateTime, default=datetime.now)
+    updated_at_timestamp = mapped_column(DateTime, default=datetime.now)
+
+
+class TablePlexMovies(Base):
+    __tablename__ = 'table_plex_movies'
+    
+    plexId = mapped_column(Integer, primary_key=True)
+    plexGuid = mapped_column(Text, nullable=False, unique=True)
+    title = mapped_column(Text, nullable=False)
+    year = mapped_column(Integer, nullable=True)
+    imdbId = mapped_column(Text, nullable=True)
+    tmdbId = mapped_column(Text, nullable=True)
+    path = mapped_column(Text, nullable=False, unique=True)
+    overview = mapped_column(Text, nullable=True)
+    poster = mapped_column(Text, nullable=True)
+    fanart = mapped_column(Text, nullable=True)
+    duration = mapped_column(Integer, nullable=True)
+    rating = mapped_column(Float, nullable=True)
+    studio = mapped_column(Text, nullable=True)
+    genres = mapped_column(Text, nullable=True)
+    directors = mapped_column(Text, nullable=True)
+    writers = mapped_column(Text, nullable=True)
+    actors = mapped_column(Text, nullable=True)
+    profileId = mapped_column(Integer, ForeignKey('table_languages_profiles.profileId', ondelete='SET NULL'), nullable=True)
+    monitored = mapped_column(Integer, nullable=True)
+    missing_subtitles = mapped_column(Text, nullable=True)
+    subtitles = mapped_column(Text, nullable=True)
+    failedAttempts = mapped_column(Text, nullable=True)
+    audio_language = mapped_column(Text, nullable=True)
+    audio_codec = mapped_column(Text, nullable=True)
+    video_codec = mapped_column(Text, nullable=True)
+    resolution = mapped_column(Text, nullable=True)
+    file_size = mapped_column(BigInteger, nullable=True)
+    ffprobe_cache = mapped_column(LargeBinary, nullable=True)
+    library_key = mapped_column(Text, nullable=True)  # Reference to Plex library
     created_at_timestamp = mapped_column(DateTime, nullable=True)
     updated_at_timestamp = mapped_column(DateTime, nullable=True)
 
@@ -341,6 +377,7 @@ class TablePlexShows(Base):
     profileId = mapped_column(Integer, ForeignKey('table_languages_profiles.profileId', ondelete='SET NULL'), nullable=True)
     monitored = mapped_column(Integer, nullable=True, default=1)
     audio_language = mapped_column(Text, nullable=True)
+    library_key = mapped_column(Text, nullable=True)  # Reference to Plex library
     created_at_timestamp = mapped_column(DateTime, nullable=True)
     updated_at_timestamp = mapped_column(DateTime, nullable=True)
     last_scanned = mapped_column(DateTime, nullable=True)
